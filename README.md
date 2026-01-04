@@ -44,7 +44,7 @@ A powerful, modular scientific RPN (Reverse Polish Notation) calculator with sup
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/rpn-calculator.git
+git clone https://github.com/rainmaker1618033/rpn-calculator.git
 cd rpn-calculator
 
 # Install dependencies
@@ -265,7 +265,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Authors
 
-- Your Name (@yourusername)
+- G Stults (@rainmaker1618033)
 
 ## Support
 
