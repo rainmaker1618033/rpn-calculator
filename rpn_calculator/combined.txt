@@ -1,0 +1,3094 @@
+
+===== arithmetic.py =====
+# ============================================================================
+# FILE: rpn_calculator/arithmetic.py
+# ============================================================================
+"""Basic arithmetic operations"""
+
+from .errors import CalculatorError
+from .utils import is_vector
+
+def register_operations(calc):
+    """Register arithmetic operations"""
+    return {
+        "+": lambda: _binary_op(calc, lambda a, b: a + b, "+"),
+        "-": lambda: _binary_op(calc, lambda a, b: a - b, "-"),
+        "*": lambda: _binary_op(calc, lambda a, b: a * b, "*"),
+        "/": lambda: _binary_op(calc, lambda a, b: _safe_divide(a, b), "/"),
+        "^": lambda: _binary_op(calc, lambda a, b: a ** b, "^"),
+        "MOD": lambda: _binary_op(calc, lambda a, b: a % b, "MOD"),
+        "||": lambda: _op_parallel(calc),
+    }
+
+def _safe_divide(a, b):
+    if b == 0:
+        raise CalculatorError("Divide by zero", restore_stack=True)
+    return a / b
+
+def _binary_op(calc, op, name: str):
+    """Execute a binary operation with vector support."""
+    if len(calc.stack) < 2:
+        raise CalculatorError(f"Not enough operands for '{name}'", restore_stack=False)
+    
+    b = calc.pop()
+    a = calc.pop()
+    
+    try:
+        if is_vector(a) or is_vector(b):
+            a_vec = list(a) if is_vector(a) else [a] * (len(b) if is_vector(b) else 1)
+            b_vec = list(b) if is_vector(b) else [b] * len(a_vec)
+            
+            if len(a_vec) != len(b_vec):
+                raise ValueError("Vector length mismatch")
+            
+            result = [op(x, y) for x, y in zip(a_vec, b_vec)]
+            calc.push(result)
+        else:
+            result = op(a, b)
+            calc.push(result)
+    except CalculatorError as e:
+        calc.push(a)
+        calc.push(b)
+        raise
+    except Exception as e:
+        calc.push(a)
+        calc.push(b)
+        raise CalculatorError(f"Error in operation '{name}': {e}", restore_stack=False)
+
+def _op_parallel(calc):
+    """Product over Sum: (x*y)/(x+y)"""
+    if len(calc.stack) < 2:
+        raise CalculatorError("'||' needs 2 values")
+    
+    y = calc.pop()
+    x = calc.pop()
+    
+    if is_vector(x) or is_vector(y):
+        calc.push(x)
+        calc.push(y)
+        raise CalculatorError("'||' cannot process vectors")
+    
+    try:
+        if x + y == 0:
+            raise ValueError("Sum is zero")
+        z = (x * y) / (x + y)
+        calc.push(z)
+    except Exception as e:
+        calc.push(x)
+        calc.push(y)
+        raise CalculatorError(f"Error in '||': {e}")
+===== calc_constants.py =====
+# ============================================================================
+# FILE: rpn_calculator/calc_constants.py
+# ============================================================================
+"""Mathematical constants"""
+
+import math
+
+def register_operations(calc):
+    """Register constant operations"""
+    return {
+        "E": lambda: calc.push(math.e),
+        "PI": lambda: calc.push(math.pi),
+        "I": lambda: calc.push(1j),
+    }
+===== cli.py =====
+# ============================================================================
+# FILE: rpn_calculator/cli.py
+# ============================================================================
+"""Command-line interface and help system"""
+
+def handle_special_commands(calc, token, tokens, index):
+    """
+    Handle special commands that don't fit the normal operation pattern.
+    Returns: "handled", "skip_next", or None
+    """
+    # Handle HELP
+    if token in {"H", "HELP"}:
+        # Consume the rest of the line as the help argument
+        if index + 1 < len(tokens):
+            # Join all remaining tokens as the help topic
+            remaining = " ".join(tokens[index + 1:])
+            show_instructions(remaining)
+            # Mark all remaining tokens as consumed
+            for j in range(index + 1, len(tokens)):
+                tokens[j] = ""  # Clear the tokens so they won't be processed
+        else:
+            show_instructions(None)
+        return "handled"
+    
+    # Handle DIGITS
+    if token == "DIGITS":
+        if index + 1 < len(tokens) and tokens[index + 1].isdigit():
+            calc.state.digits = int(tokens[index + 1])
+            print(f"Display precision set to {calc.state.digits} digits.")
+            return "skip_next"
+        else:
+            print("Usage: DIGITS n   (e.g., DIGITS 4)")
+        return "handled"
+    
+    # Handle FORMAT
+    if token == "FORMAT":
+        if index + 1 < len(tokens):
+            fmt = tokens[index + 1].upper()
+            if fmt in {"FLOAT", "SCIENTIFIC"}:
+                calc.state.format = fmt
+                print(f"Number format set to: {fmt}")
+                return "skip_next"
+            else:
+                print("Usage: FORMAT FLOAT | FORMAT SCIENTIFIC")
+        else:
+            print("Usage: FORMAT FLOAT | FORMAT SCIENTIFIC")
+        return "handled"
+    
+    # Handle mode operations
+    if token == "DEG":
+        calc.state.degrees = True
+        print("Mode set to: Degrees")
+        return "handled"
+    
+    if token == "RAD":
+        calc.state.degrees = False
+        print("Mode set to: Radians")
+        return "handled"
+    
+    if token == "SHOWMODE":
+        print(f"Current mode: {'Degrees' if calc.state.degrees else 'Radians'}")
+        print(f"Display: {calc.state.digits} digits, {calc.state.format} format")
+        return "handled"
+    
+    if token == "LOG":
+        if index + 1 < len(tokens):
+            action = tokens[index + 1].upper()
+            if action == "ON":
+                calc.logger.enabled = True
+                calc.logger.log_message("Logging enabled")
+                print("Logging enabled")
+                return "skip_next"
+            elif action == "OFF":
+                calc.logger.enabled = False
+                print("Logging disabled")
+                return "skip_next"
+        print(f"Logging is currently: {'ON' if calc.logger.enabled else 'OFF'}")
+        print("Usage: LOG ON | LOG OFF")
+        return "handled"
+    
+    return None
+
+def show_instructions(choice=None):
+    """Display calculator instructions"""
+    # Import help sections from modules
+    from . import help_text
+    help_text.show_instructions(choice)
+
+def main():
+    '''Main CLI loop'''
+    from .core import Calculator
+    import copy
+    
+    show_instructions(None)
+    calc = Calculator()
+    
+    try:
+        while True:
+            try:
+                line = input("> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\\nExiting.")
+                break
+            
+            if line == "@":
+                print("Goodbye.")
+                break
+            
+            if line == "":
+                if calc.stack:
+                    calc.stack.append(calc.stack[-1])
+                calc.print_stack()
+                continue
+            
+            # Save stack state before operation (for logging)
+            stack_before = copy.deepcopy(calc.stack)
+            error_msg = None
+            
+            try:
+                tokens = line.split()
+                calc.process_tokens(tokens)
+            except Exception as e:
+                error_msg = str(e)
+
+            # Log the operation
+            calc.logger.log_operation(line, stack_before, calc.stack, error_msg)
+
+            # DEBUG Log the operation
+            #print(f"DEBUG: About to log operation: '{line}'")
+            #print(f"DEBUG: Stack before: {stack_before}")
+            #print(f"DEBUG: Stack after: {calc.stack}")
+            #calc.logger.log_operation(line, stack_before, calc.stack, error_msg)
+            #print(f"DEBUG: Logged successfully")
+
+            calc.print_stack()
+            calc.print_stack_inline()
+    
+    finally:
+        # Close logger when exiting
+        calc.logger.close()
+
+
+# ============================================================================
+# SUMMARY: File Organization
+# ============================================================================
+"""
+Complete file structure:
+
+rpn_calculator/
+├── __init__.py                 # Package exports
+├── core.py                     # Calculator class, state, main logic
+├── errors.py                   # CalculatorError exception
+├── utils.py                    # is_vector, is_matrix helpers
+├── formatting.py               # ValueFormatter class
+├── cli.py                      # main(), command handling, help
+├── help_text.py                # Help documentation
+│
+├── stack_operations.py         # C, DEL, UNDO, SWAP, RD, RU
+├── arithmetic.py               # +, -, *, /, ^, MOD
+├── trigonometry.py             # SIN, COS, TAN, ASIN, ACOS, ATAN
+├── logarithmic.py              # LOG, LN, EXP, SQRT, 1/X
+├── complex_numbers.py          # CMPLX, RECT, POLAR, RE, IM, ABS, ARG, CONJ
+├── vectors.py                  # DOT, VMAG, VCROSS, VNORM, ||
+├── matrices.py                 # MATRIX, DET, TRACE, MINV, M+, M-, M*, etc.
+├── matrix_decompositions.py   # LU, QR, SVD, CHOLESKY, SCHUR, etc.
+├── statistics.py               # COMB, PERM, STDV
+└── integer_ops.py              # GCD, LCM
+
+Usage:
+    from rpn_calculator import Calculator
+    
+    calc = Calculator()
+    result = calc.evaluate("3 4 +")
+    print(result)  # 7
+
+Or run CLI:
+    python -m rpn_calculator
+"""
+===== complex_numbers.py =====
+"""Complex number operations"""
+
+import math
+import cmath
+from .errors import CalculatorError
+
+def register_operations(calc):
+    """Register complex number operations"""
+    return {
+        "CMPLX": lambda: _op_cmplx(calc),
+        "RECT": lambda: _op_rect(calc),
+        "POLAR": lambda: _op_polar(calc),
+        "RE": lambda: _op_re(calc),
+        "IM": lambda: _op_im(calc),
+        "ABS": lambda: _op_abs(calc),
+        "ARG": lambda: _op_arg(calc),
+        "CONJ": lambda: _op_conj(calc),
+    }
+
+def _op_cmplx(calc):
+    if len(calc.stack) < 2:
+        raise CalculatorError("CMPLX needs 2 values (real, imag)")
+    
+    imag = calc.pop()
+    real = calc.pop()
+    z = complex(real, imag)
+    calc.push(z)
+
+def _op_rect(calc):
+    if len(calc.stack) < 2:
+        raise CalculatorError("RECT needs 2 values (r, theta)")
+    
+    theta = calc.pop()
+    r = calc.pop()
+    
+    if calc.state.degrees:
+        theta = math.radians(theta)
+    
+    z = cmath.rect(r, theta)
+    calc.push(z)
+
+def _op_polar(calc):
+    if not calc.stack:
+        raise CalculatorError("POLAR needs a complex number")
+    
+    z = calc.pop()
+    r, theta = cmath.polar(z)
+    
+    if calc.state.degrees:
+        theta = math.degrees(theta)
+    
+    calc.push(r)
+    calc.push(theta)
+
+def _op_re(calc):
+    if not calc.stack:
+        raise CalculatorError("RE needs a value")
+    z = calc.pop()
+    calc.push(complex(z).real)
+
+def _op_im(calc):
+    if not calc.stack:
+        raise CalculatorError("IM needs a value")
+    z = calc.pop()
+    calc.push(complex(z).imag)
+
+def _op_abs(calc):
+    if not calc.stack:
+        raise CalculatorError("ABS needs a value")
+    z = calc.pop()
+    calc.push(abs(z))
+
+def _op_arg(calc):
+    if not calc.stack:
+        raise CalculatorError("ARG needs a value")
+    z = calc.pop()
+    angle = cmath.phase(z)
+    if calc.state.degrees:
+        angle = math.degrees(angle)
+    calc.push(angle)
+
+def _op_conj(calc):
+    if not calc.stack:
+        raise CalculatorError("CONJ needs a value")
+    z = calc.pop()
+    calc.push(complex(z).conjugate())
+===== core.py =====
+# ============================================================================
+# FILE: rpn_calculator/core.py
+# ============================================================================
+"""Core Calculator class and state management"""
+
+import copy
+from typing import List, Any, Dict, Callable
+from dataclasses import dataclass, field
+
+from .errors import CalculatorError
+from .utils import is_vector, is_matrix
+
+# Import operation modules
+from . import stack_operations
+from . import arithmetic
+from . import trigonometry
+from . import logarithmic
+from . import complex_numbers
+from . import calc_constants
+from . import vectors
+from . import matrices
+from . import matrix_decompositions
+from . import statistics
+from . import integer_ops
+from . import calc_constants
+from . import fft_operations
+from .logging import CalculatorLogger
+from .formatting import ValueFormatter
+
+@dataclass
+class CalculatorState:
+    """Holds calculator configuration state."""
+    degrees: bool = True
+    digits: int = 6
+    format: str = "FLOAT"
+
+class Calculator:
+    """RPN Calculator with complex numbers, vectors, and matrices."""
+    
+    def __init__(self,enable_logging=True):
+        self.stack: List[Any] = []
+        self.state = CalculatorState()
+        self.history: List[List[Any]] = []
+        self.operations: Dict[str, Callable] = {}
+        self.formatter = ValueFormatter(self.state)
+        #self.logger = CalculatorLogger(enabled=True)
+
+        # Only enable logging if requested (disabled for tests and library use)
+        if enable_logging:
+            from .logging import CalculatorLogger
+            self.logger = CalculatorLogger(enabled=True)
+        else:
+            # Create a dummy logger that does nothing
+            class DummyLogger:
+                def __init__(self):
+                    self.enabled = False
+                def log_operation(self, *args, **kwargs):
+                    pass
+                def log_message(self, *args, **kwargs):
+                    pass
+                def close(self):
+                    pass
+            self.logger = DummyLogger()
+		
+        # Utility methods available to operation modules
+        self.is_vector = is_vector
+        self.is_matrix = is_matrix
+        
+        # Build operation registry from all modules
+        self._register_all_operations()
+    
+    def _register_all_operations(self):
+        """Register operations from all modules"""
+        modules = [
+            stack_operations,
+            arithmetic,
+            trigonometry,
+            logarithmic,
+            complex_numbers,
+            vectors,
+            matrices,
+            matrix_decompositions,
+            statistics,
+            integer_ops,
+            calc_constants,
+            fft_operations,
+        ]
+        
+        for module in modules:
+            ops = module.register_operations(self)
+            self.operations.update(ops)
+    
+    def _save_history(self):
+        """Save current stack state to history."""
+        self.history.append(copy.deepcopy(self.stack))
+    
+    def _should_save_history(self, token: str) -> bool:
+        """Determine if operation should save history."""
+        no_history_ops = {"H", "HELP", "SHOWMODE", "UNDO", "DIGITS", "FORMAT"}
+        return token not in no_history_ops
+    
+    # Helper methods used by operation modules
+    def push(self, value: Any):
+        """Push value onto stack"""
+        self.stack.append(value)
+    
+    def pop(self) -> Any:
+        """Pop and return top of stack"""
+        if not self.stack:
+            raise CalculatorError("Stack is empty", restore_stack=False)
+        return self.stack.pop()
+    
+    def peek(self) -> Any:
+        """Return top of stack without popping"""
+        if not self.stack:
+            raise CalculatorError("Stack is empty", restore_stack=False)
+        return self.stack[-1]
+    
+    def get_result(self) -> Any:
+        """Get top of stack without popping (returns None if empty)"""
+        return self.stack[-1] if self.stack else None
+    
+    def evaluate(self, expression: str) -> Any:
+        """Evaluate RPN expression and return result"""
+        tokens = expression.split()
+        self.process_tokens(tokens)
+        return self.get_result()
+    
+    def evaluate_and_clear(self, expression: str) -> Any:
+        """Evaluate and return result, clearing stack after"""
+        result = self.evaluate(expression)
+        self.stack.clear()
+        return result
+    
+    # Token processing
+    def process_tokens(self, tokens: List[str]):
+        '''Process a list of RPN tokens.'''
+        from .cli import handle_special_commands
+        
+        skip_next = False
+        i = 0
+        while i < len(tokens):
+            if skip_next:
+                skip_next = False
+                i += 1
+                continue
+            
+            token = tokens[i].strip().upper()
+            if not token:
+                i += 1
+                continue
+            
+            # Save stack state before operation (for logging)
+            stack_before = copy.deepcopy(self.stack)
+            error_msg = None
+            
+            try:
+                # Handle special commands (HELP, DIGITS, FORMAT)
+                result = handle_special_commands(self, token, tokens, i)
+                if result == "skip_all":
+                    break
+                elif result == "skip_next":
+                    skip_next = True
+                    i += 1
+                    continue
+                elif result == "handled":
+                    i += 1
+                    continue
+                
+                # Save history before operations
+                if self._should_save_history(token):
+                    self._save_history()
+                
+                # Try to execute operation
+                if token in self.operations:
+                    self.operations[token]()
+                else:
+                    # Try to parse as number or vector/matrix
+                    self._parse_and_push(token)
+                    
+            except CalculatorError as e:
+                error_msg = e.message
+                print(f"Error: {e.message}")
+            
+            # Log the operation
+            # self.logger.log_operation(token, stack_before, self.stack, error_msg)
+            
+            i += 1
+
+    
+    def _parse_and_push(self, token: str):
+        """Parse and push a number, vector, or matrix onto the stack."""
+        import ast
+        try:
+            if token.startswith("[") and token.endswith("]"):
+                parsed = ast.literal_eval(token)
+                if not isinstance(parsed, (list, tuple)):
+                    raise ValueError("Invalid vector/matrix format")
+                self.stack.append(parsed)
+            else:
+                # Try to parse as integer first
+                try:
+                    # Check if it's an integer (no decimal point, no 'e' notation)
+                    if '.' not in token and 'e' not in token.lower() and 'j' not in token.lower():
+                        val = int(token)
+                        self.stack.append(val)
+                        return
+                except ValueError:
+                    pass
+                
+                # Otherwise parse as complex/float
+                val = complex(token.replace('I', 'j'))
+                if val.imag == 0:
+                    val = val.real
+                self.stack.append(val)
+        except Exception:
+            raise CalculatorError(f"Invalid token: {token}", restore_stack=False)
+        
+    def print_stack(self):
+        """Print the current stack."""
+        mode = "DEG" if self.state.degrees else "RAD"
+        if not self.stack:
+            print(f"[Stack empty]   (Mode: {mode})")
+        else:
+            print(f"\nStack (Mode: {mode}, {self.state.digits} digits, {self.state.format}):")
+            for i, val in enumerate(reversed(self.stack), 1):
+                print(f"{i:>2}: {self.formatter.format_value(val)}")
+            print()
+    
+    def print_stack_inline(self):
+        """Print stack inline."""
+        if not self.stack:
+            print("[Stack empty]")
+            return
+        formatted = [self.formatter.format_value(v) for v in reversed(self.stack)]
+        print("Stack (inline): Top → " + "  ".join(formatted) + " ← Bottom")
+
+===== errors.py =====
+# ============================================================================
+# FILE: rpn_calculator/errors.py
+# ============================================================================
+"""Custom exceptions for the calculator"""
+
+from dataclasses import dataclass
+
+@dataclass
+class CalculatorError(Exception):
+    """Custom exception for calculator errors."""
+    message: str
+    restore_stack: bool = True
+
+===== fft_operations.py =====
+# ============================================================================
+# FILE: rpn_calculator/fft_operations.py
+# ============================================================================
+"""FFT and spectral analysis operations"""
+
+import math
+import numpy as np
+from .errors import CalculatorError
+
+def register_operations(calc):
+    """Register FFT operations"""
+    return {
+        "FFT": lambda: _op_fft(calc),
+        "IFFT": lambda: _op_ifft(calc),
+        "FFT_MAG": lambda: _op_fft_mag(calc),
+        "FFT_PHASE": lambda: _op_fft_phase(calc),
+    }
+
+def _next_power_of_2(n):
+    """Find the next power of 2 greater than or equal to n"""
+    if n <= 0:
+        return 1
+    # Check if already a power of 2
+    if n & (n - 1) == 0:
+        return n
+    # Find next power of 2
+    power = 1
+    while power < n:
+        power *= 2
+    return power
+
+def _zero_pad_to_power_of_2(data):
+    """Zero-pad data to next power of 2 length"""
+    current_length = len(data)
+    target_length = _next_power_of_2(current_length)
+    
+    if target_length == current_length:
+        return data, current_length, False
+    
+    # Pad with zeros
+    padded = list(data) + [0] * (target_length - current_length)
+    return padded, current_length, True
+
+def _op_fft(calc):
+    """
+    Compute Fast Fourier Transform
+    Automatically zero-pads to next power of 2 if needed
+    """
+    if not calc.stack:
+        raise CalculatorError("FFT needs a vector")
+    
+    data = calc.pop()
+    
+    if not isinstance(data, (list, tuple)):
+        calc.push(data)
+        raise CalculatorError("FFT expects a vector")
+    
+    try:
+        if len(data) == 0:
+            raise ValueError("Empty vector")
+        
+        # Zero-pad to next power of 2
+        padded_data, original_length, was_padded = _zero_pad_to_power_of_2(data)
+        
+        # Convert to complex if not already
+        data_array = np.array(padded_data, dtype=complex)
+        
+        # Compute FFT
+        fft_result = np.fft.fft(data_array)
+        
+        # Convert to Python list of complex numbers
+        result = fft_result.tolist()
+        
+        calc.push(result)
+        
+        # Print info
+        if was_padded:
+            print(f"FFT: Zero-padded from {original_length} to {len(padded_data)} samples")
+        else:
+            print(f"FFT: Computed on {len(data)} samples")
+        
+    except Exception as e:
+        calc.push(data)
+        raise CalculatorError(f"Error in FFT: {e}")
+
+def _op_ifft(calc):
+    """
+    Compute Inverse Fast Fourier Transform
+    Returns real-valued result if imaginary parts are negligible
+    """
+    if not calc.stack:
+        raise CalculatorError("IFFT needs a vector")
+    
+    data = calc.pop()
+    
+    if not isinstance(data, (list, tuple)):
+        calc.push(data)
+        raise CalculatorError("IFFT expects a vector")
+    
+    try:
+        if len(data) == 0:
+            raise ValueError("Empty vector")
+        
+        # Zero-pad to next power of 2
+        padded_data, original_length, was_padded = _zero_pad_to_power_of_2(data)
+        
+        # Convert to complex
+        data_array = np.array(padded_data, dtype=complex)
+        
+        # Compute IFFT
+        ifft_result = np.fft.ifft(data_array)
+        
+        # Check if result is essentially real
+        max_imag = np.max(np.abs(ifft_result.imag))
+        if max_imag < 1e-10:
+            # Return real values only
+            result = ifft_result.real.tolist()
+        else:
+            # Return complex values
+            result = ifft_result.tolist()
+        
+        calc.push(result)
+        
+        if was_padded:
+            print(f"IFFT: Zero-padded from {original_length} to {len(padded_data)} samples")
+        else:
+            print(f"IFFT: Computed on {len(data)} samples")
+        
+    except Exception as e:
+        calc.push(data)
+        raise CalculatorError(f"Error in IFFT: {e}")
+
+def _op_fft_mag(calc):
+    """
+    Compute magnitude spectrum of FFT
+    Returns magnitude of each frequency bin
+    """
+    if not calc.stack:
+        raise CalculatorError("FFT_MAG needs a vector")
+    
+    data = calc.pop()
+    
+    if not isinstance(data, (list, tuple)):
+        calc.push(data)
+        raise CalculatorError("FFT_MAG expects a vector")
+    
+    try:
+        if len(data) == 0:
+            raise ValueError("Empty vector")
+        
+        # Zero-pad to next power of 2
+        padded_data, original_length, was_padded = _zero_pad_to_power_of_2(data)
+        
+        # Convert to complex
+        data_array = np.array(padded_data, dtype=complex)
+        
+        # Compute FFT
+        fft_result = np.fft.fft(data_array)
+        
+        # Compute magnitude
+        magnitude = np.abs(fft_result)
+        
+        # Convert to list
+        result = magnitude.tolist()
+        
+        calc.push(result)
+        
+        if was_padded:
+            print(f"FFT_MAG: Zero-padded from {original_length} to {len(padded_data)} samples")
+        else:
+            print(f"FFT_MAG: Computed on {len(data)} samples")
+        print(f"Magnitude spectrum: {len(result)} frequency bins")
+        
+    except Exception as e:
+        calc.push(data)
+        raise CalculatorError(f"Error in FFT_MAG: {e}")
+
+def _op_fft_phase(calc):
+    """
+    Compute phase spectrum of FFT
+    Returns phase of each frequency bin in degrees (or radians if RAD mode)
+    """
+    if not calc.stack:
+        raise CalculatorError("FFT_PHASE needs a vector")
+    
+    data = calc.pop()
+    
+    if not isinstance(data, (list, tuple)):
+        calc.push(data)
+        raise CalculatorError("FFT_PHASE expects a vector")
+    
+    try:
+        if len(data) == 0:
+            raise ValueError("Empty vector")
+        
+        # Zero-pad to next power of 2
+        padded_data, original_length, was_padded = _zero_pad_to_power_of_2(data)
+        
+        # Convert to complex
+        data_array = np.array(padded_data, dtype=complex)
+        
+        # Compute FFT
+        fft_result = np.fft.fft(data_array)
+        
+        # Compute phase
+        phase = np.angle(fft_result)
+        
+        # Convert to degrees if in degree mode
+        if calc.state.degrees:
+            phase = np.degrees(phase)
+        
+        # Convert to list
+        result = phase.tolist()
+        
+        calc.push(result)
+        
+        if was_padded:
+            print(f"FFT_PHASE: Zero-padded from {original_length} to {len(padded_data)} samples")
+        else:
+            print(f"FFT_PHASE: Computed on {len(data)} samples")
+        
+        units = "degrees" if calc.state.degrees else "radians"
+        print(f"Phase spectrum: {len(result)} frequency bins ({units})")
+        
+    except Exception as e:
+        calc.push(data)
+        raise CalculatorError(f"Error in FFT_PHASE: {e}")
+
+===== flist.txt =====
+arithmetic.py
+calc_constants.py
+cli.py
+complex_numbers.py
+core.py
+errors.py
+fft_operations.py
+flist.txt
+formatting.py
+help_text.py
+integer_ops.py
+integer_ops_old.py
+logarithmic.py
+logging.py
+matrices.py
+matrix_decompositions.py
+operations.py
+setup.py
+stack_operations.py
+statistics.py
+trigonometry.py
+utils.py
+vectors.py
+__init__.py
+__main__.py
+
+===== formatting.py =====
+# ============================================================================
+# FILE: rpn_calculator/formatting.py
+# ============================================================================
+"""Output formatting for different value types"""
+
+class ValueFormatter:
+    """Handles formatting of values for display"""
+    
+    def __init__(self, state):
+        self.state = state
+    
+    def format_value(self, val) -> str:
+        """Format a value for display."""
+        digits = self.state.digits
+        fmt_mode = self.state.format
+        fmt = f".{digits}{'e' if fmt_mode == 'SCIENTIFIC' else 'f'}"
+        
+        def format_number(x):
+            if isinstance(x, int):
+                return str(x)
+            try:
+                formatted = format(x, fmt)
+                return formatted.rstrip('0').rstrip('.') if fmt_mode == 'FLOAT' else formatted
+            except Exception:
+                return str(x)
+        
+        if isinstance(val, complex):
+            real = format_number(val.real)
+            imag = format_number(abs(val.imag))
+            sign = "+" if val.imag >= 0 else "-"
+            return f"{real}{sign}{imag}j"
+        elif isinstance(val, (float, int)):
+            return format_number(val)
+        elif isinstance(val, (list, tuple)):
+            return "[" + ", ".join(self.format_value(v) for v in val) + "]"
+        else:
+            return str(val)
+===== help_text.py =====
+# ============================================================================
+# FILE: rpn_calculator/help_text.py (UPDATED)
+# ============================================================================
+"""Help text and documentation - Improved version"""
+
+# Organize help into categories and subcategories
+HELP_SECTIONS = {
+    "Overview": """
+╔═══════════════════════════════════════════════════════════════════════════╗
+║              RPN CALCULATOR - QUICK REFERENCE                             ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+Type 'HELP <category>' for detailed help on:
+
+BASICS:
+  General      - Stack operations, basic commands (C, DEL, UNDO, SWAP, etc.)
+  Math         - Arithmetic, scientific functions (+, -, *, /, ^, MOD, etc.)
+  Constants    - Mathematical and physical constants (E, PI, I, etc.)
+
+ADVANCED MATH:
+  Trig         - Trigonometric functions (SIN, COS, TAN, ASIN, etc.)
+  Complex      - Complex number operations (CMPLX, RECT, POLAR, etc.)
+  Stats        - Statistics (COMB, PERM, STDV)
+  
+VECTORS & MATRICES:
+  Vector       - Vector operations (DOT, VMAG, VCROSS, VNORM)
+  Matrix       - Matrix operations (MATRIX, DET, TRACE, MINV, M+, M*, etc.)
+  Decomp       - Matrix decompositions (LU, QR, SVD, CHOLESKY, etc.)
+  
+SIGNAL PROCESSING:
+  FFT          - Fourier transforms (FFT, IFFT, FFT_MAG, FFT_PHASE)
+
+SETTINGS:
+  Modes        - DEG/RAD mode, display settings
+  Examples     - Usage examples
+
+Type 'HELP ALL' to see all help at once (long output!)
+Type 'HELP SEARCH <term>' to search for a command
+Type '@' to exit the calculator
+""",
+
+    "General": """
+═══════════════════════════════════════════════════════════════════════════
+GENERAL COMMANDS
+═══════════════════════════════════════════════════════════════════════════
+Stack Operations:
+  C            Clear entire stack
+  DEL          Delete top item from stack
+  UNDO         Undo last operation (restore previous stack state)
+  (blank)      Press Enter on blank line to duplicate top of stack
+  
+Stack Manipulation:
+  R↓  (RD)     Roll stack down (bottom item moves to top)
+  R↑  (RU)     Roll stack up (top item moves to bottom)
+  X<>Y (SWAP)  Swap top two stack items
+  
+Program Control:
+  @            Exit calculator
+  H, HELP      Show help menu
+  
+Examples:
+  3 4 SWAP     → Stack: [4, 3]
+  1 2 3 RD     → Stack: [3, 1, 2]
+  5            → (Enter on empty line duplicates 5)
+""",
+
+    "Math": """
+═══════════════════════════════════════════════════════════════════════════
+MATH & SCIENTIFIC FUNCTIONS
+═══════════════════════════════════════════════════════════════════════════
+Basic Arithmetic:
+  +  -  *  /   Standard operations
+  ^            Power (exponentiation)
+  MOD          Modulo
+  ||           Parallel operation: (x*y)/(x+y)
+  
+Logarithmic & Exponential:
+  LOG          Base-10 logarithm
+  LOG2         Base-2 logarithm
+  LN           Natural logarithm
+  EXP          e^x
+  SQRT         Square root
+  1/X  (INV)   Reciprocal
+  
+Integer Operations:
+  GCD          Greatest common divisor
+  LCM          Least common multiple
+  FRAC         Convert to fraction with residual
+  
+Examples:
+  3 4 +        → 7
+  2 8 ^        → 256
+  12 18 GCD    → 6
+  0.75 FRAC    → 3/4
+""",
+
+    "Trig": """
+═══════════════════════════════════════════════════════════════════════════
+TRIGONOMETRIC FUNCTIONS
+═══════════════════════════════════════════════════════════════════════════
+Forward Functions:
+  SIN  COS  TAN       Standard trig functions
+  
+Inverse Functions:
+  ASIN ACOS ATAN      Arc/inverse trig functions
+  
+Mode Settings:
+  DEG                 Set to degrees mode
+  RAD                 Set to radians mode
+  SHOWMODE            Display current mode
+  
+Notes:
+  • Input angles in current mode (DEG or RAD)
+  • Inverse functions return angles in current mode
+  • Works with complex numbers for extended domain
+  
+Examples:
+  DEG 30 SIN          → 0.5
+  RAD 1.5708 COS      → 0 (π/2)
+  0.5 ASIN            → 30 (in DEG mode)
+""",
+
+    "Complex": """
+═══════════════════════════════════════════════════════════════════════════
+COMPLEX NUMBER OPERATIONS
+═══════════════════════════════════════════════════════════════════════════
+Creating Complex Numbers:
+  CMPLX         Combine real and imaginary: real imag CMPLX → a+bj
+  RECT          Polar to rectangular: r θ RECT → a+bj
+  
+Extracting Components:
+  RE            Real part
+  IM            Imaginary part
+  ABS           Magnitude (absolute value)
+  ARG           Angle/argument/phase
+  
+Conversions:
+  POLAR         Rectangular to polar: a+bj POLAR → r, θ
+  CONJ          Complex conjugate
+  
+Examples:
+  3 4 CMPLX     → 3+4j
+  3+4j ABS      → 5
+  1 45 RECT     → 0.707+0.707j (in DEG mode)
+  3+4j POLAR    → 5, 53.13 (in DEG mode)
+""",
+
+    "Vector": """
+═══════════════════════════════════════════════════════════════════════════
+VECTOR OPERATIONS
+═══════════════════════════════════════════════════════════════════════════
+Creating Vectors:
+  [1,2,3]       Enter vector using square brackets
+  
+Vector Operations:
+  DOT           Dot product (inner product)
+  VMAG          Vector magnitude (Euclidean norm)
+  VCROSS        Cross product (3D vectors only)
+  VNORM         Normalize vector (unit vector)
+  
+Element-wise Operations:
+  + - * / ^     Work element-wise on vectors
+                Scalars broadcast automatically
+  
+Examples:
+  [1,2,3] [4,5,6] DOT    → 32
+  [3,4] VMAG             → 5
+  [1,0,0] [0,1,0] VCROSS → [0,0,1]
+  [3,4] VNORM            → [0.6, 0.8]
+  [1,2,3] 2 *            → [2,4,6]
+""",
+
+    "Matrix": """
+═══════════════════════════════════════════════════════════════════════════
+MATRIX OPERATIONS
+═══════════════════════════════════════════════════════════════════════════
+Creating Matrices:
+  MATRIX        Create from rows: [r1] [r2] ... n MATRIX
+  IDENTITY      Create n×n identity matrix: n IDENTITY
+  
+Properties:
+  MSIZE         Get dimensions → rows, cols
+  TRANSPOSE     Transpose (rows ↔ columns)
+  DET           Determinant
+  TRACE         Trace (sum of diagonal)
+  RANK          Matrix rank
+  COND          Condition number (stability measure)
+  NORM          Matrix norm (Frobenius by default)
+  
+Arithmetic:
+  M+            Matrix addition
+  M-            Matrix subtraction
+  M*            Matrix multiplication (or scalar × matrix)
+  MSCALE        Scale by scalar: matrix scalar MSCALE
+  
+Advanced:
+  MINV          Matrix inverse
+  EIGEN         Eigenvalues
+  EIGENVEC      Eigenvalues and eigenvectors
+  RREF          Reduced row echelon form
+  MSOLVE        Solve Ax=b: A b MSOLVE → x
+  
+Examples:
+  [1,2] [3,4] 2 MATRIX    → Create 2×2 matrix
+  [[1,2],[3,4]] DET       → -2
+  [[1,2],[3,4]] MINV      → Inverse matrix
+  [[2,1],[1,3]] [5,6] MSOLVE → [1.8, 1.4]
+""",
+
+    "Decomp": """
+═══════════════════════════════════════════════════════════════════════════
+MATRIX DECOMPOSITIONS
+═══════════════════════════════════════════════════════════════════════════
+Standard Decompositions:
+  LU            LU decomposition: A = P·L·U
+                Returns P (permutation), L (lower), U (upper)
+  
+  QR            QR decomposition: A = Q·R
+                Q is orthogonal, R is upper triangular
+                
+  SVD           Singular Value Decomposition: A = U·Σ·V*
+                Returns U, Σ (diagonal), V* (conjugate transpose)
+  
+Specialized:
+  CHOLESKY      Cholesky: A = L·L* (positive definite matrices)
+                Returns L (lower triangular)
+  
+  SCHUR         Schur: A = Q·T·Q* (requires scipy)
+                T is upper triangular
+  
+  HESSENBERG    Hessenberg: A = Q·H·Q* (requires scipy)
+                H is upper Hessenberg form
+  
+Usage Notes:
+  • All decompositions verify properties before computation
+  • Results pushed to stack in order shown
+  • Use M* to verify: multiply factors to recover original
+  • Some decompositions require scipy library
+  
+Examples:
+  [[1,2],[3,4]] QR        → Returns Q, R
+  [[4,2],[2,3]] CHOLESKY  → Returns L
+  [[3,2],[2,3]] SVD       → Returns U, Σ, V*
+""",
+
+    "FFT": """
+═══════════════════════════════════════════════════════════════════════════
+FOURIER TRANSFORM OPERATIONS
+═══════════════════════════════════════════════════════════════════════════
+Transform Operations:
+  FFT           Fast Fourier Transform
+                Converts time/spatial domain → frequency domain
+                Auto zero-pads to next power of 2
+  
+  IFFT          Inverse FFT
+                Converts frequency domain → time/spatial domain
+                Returns real values when appropriate
+  
+Spectral Analysis:
+  FFT_MAG       Magnitude spectrum
+                Returns |FFT(x)| for each frequency bin
+  
+  FFT_PHASE     Phase spectrum
+                Returns angle of FFT(x)
+                Respects DEG/RAD mode
+  
+Key Features:
+  • Automatic zero-padding to power of 2 (reports if done)
+  • Conjugate symmetry for real inputs
+  • Round-trip: FFT → IFFT recovers original signal
+  
+FFT Output Order:
+  [DC, freq1, freq2, ..., Nyquist, -freq2, -freq1]
+  
+Examples:
+  [1,2,3,4,5,6,7,8] FFT      → Frequency domain
+  [1,2,3,4,5] FFT            → Auto-pads to 8 samples
+  [signal] FFT_MAG           → Magnitude spectrum
+  [signal] FFT IFFT          → Roundtrip (recovers signal)
+  
+  DEG [1,1,0,0] FFT_PHASE    → Phase in degrees
+""",
+
+    "Stats": """
+═══════════════════════════════════════════════════════════════════════════
+STATISTICS OPERATIONS
+═══════════════════════════════════════════════════════════════════════════
+Combinatorics:
+  COMB          Combinations: n k COMB → n choose k
+  PERM          Permutations: n k PERM → P(n,k)
+  
+Descriptive Statistics:
+  STDV          Standard deviation of vector
+  
+Examples:
+  5 2 COMB      → 10 (ways to choose 2 from 5)
+  5 2 PERM      → 20 (ways to arrange 2 from 5)
+  [1,2,3,4,5] STDV → 1.414...
+""",
+
+    "Constants": """
+═══════════════════════════════════════════════════════════════════════════
+MATHEMATICAL CONSTANTS
+═══════════════════════════════════════════════════════════════════════════
+  E             Euler's number (2.71828...)
+  PI            Pi (3.14159...)
+  I             Imaginary unit (√-1)
+
+Examples:
+  E LN          → 1
+  PI 2 /        → 1.5708... (π/2)
+  0 1 CMPLX     → 0+1j (same as I)
+""",
+
+    "Modes": """
+═══════════════════════════════════════════════════════════════════════════
+CALCULATOR MODES & SETTINGS
+═══════════════════════════════════════════════════════════════════════════
+Angle Mode:
+  DEG           Set trigonometric mode to degrees
+  RAD           Set trigonometric mode to radians
+  SHOWMODE      Display current mode and settings
+  
+Display Settings:
+  DIGITS n      Set decimal precision (e.g., DIGITS 4)
+  FORMAT FLOAT  Use normal floating-point display
+  FORMAT SCIENTIFIC  Use scientific notation (e.g., 1.23e-4)
+  
+Current Settings:
+  • Angle mode affects: SIN, COS, TAN, ASIN, ACOS, ATAN
+  • Angle mode affects: RECT, POLAR, ARG, FFT_PHASE
+  • Display settings affect stack printout only
+""",
+
+    "Examples": """
+═══════════════════════════════════════════════════════════════════════════
+USAGE EXAMPLES
+═══════════════════════════════════════════════════════════════════════════
+Basic Arithmetic:
+  3 4 +                    → 7
+  10 3 - 2 *               → 14 (chain operations)
+  
+Complex Numbers:
+  3 4 CMPLX ABS            → 5 (magnitude of 3+4j)
+  
+Vectors:
+  [1,2,3] [4,5,6] DOT      → 32
+  [2,3,4] 2 *              → [4,6,8]
+  
+Matrices:
+  [[1,2],[3,4]] DET        → -2
+  [[1,2],[3,4]] MINV       → Inverse matrix
+  
+Solving Systems:
+  [2,1] [1,3] 2 MATRIX     → Create coefficient matrix
+  [5,6]                    → Right-hand side
+  MSOLVE                   → [1.8, 1.4]
+  
+FFT:
+  [1,2,3,4,5,6,7,8] FFT_MAG  → Frequency spectrum
+  [signal] FFT IFFT          → Identity (recovers signal)
+  
+Stack Operations:
+  3 (Enter on blank line)    → Duplicate: [3, 3]
+  1 2 3 SWAP                 → [1, 3, 2]
+""",
+}
+
+
+def show_instructions(choice=None):
+    """Display calculator instructions or a specific section."""
+    if choice is None:
+        # Show overview/menu
+        print(HELP_SECTIONS["Overview"])
+    elif choice.upper() == "ALL":
+        # Show all sections
+        print("\n" + "="*79)
+        print("COMPLETE HELP DOCUMENTATION")
+        print("="*79 + "\n")
+        for section_name, content in HELP_SECTIONS.items():
+            if section_name != "Overview":
+                print(content)
+                print()
+    elif choice.upper().startswith("SEARCH"):
+        # Search functionality
+        search_term = choice[6:].strip().upper()
+        if not search_term:
+            print("Usage: HELP SEARCH <term>")
+            print("Example: HELP SEARCH matrix")
+            return
+        
+        print(f"\nSearching for '{search_term}'...\n")
+        found = False
+        for section_name, content in HELP_SECTIONS.items():
+            if search_term in content.upper():
+                print(f"Found in section: {section_name}")
+                # Show just the relevant part
+                lines = content.split('\n')
+                for i, line in enumerate(lines):
+                    if search_term in line.upper():
+                        # Show context (3 lines before and after)
+                        start = max(0, i-3)
+                        end = min(len(lines), i+4)
+                        print("  ...")
+                        for j in range(start, end):
+                            marker = ">>> " if j == i else "    "
+                            print(marker + lines[j])
+                        print("  ...")
+                        print()
+                found = True
+        
+        if not found:
+            print(f"No help found for '{search_term}'")
+            print("Try: HELP (to see available categories)")
+    else:
+        # Show specific section - try case-insensitive match
+        key = choice.strip()
+        
+        # Try exact match first (case-insensitive)
+        matched_key = None
+        for section_name in HELP_SECTIONS.keys():
+            if section_name.upper() == key.upper():
+                matched_key = section_name
+                break
+        
+        if matched_key:
+            print(HELP_SECTIONS[matched_key])
+        else:
+            print(f"Unknown help topic: {choice}")
+            print("\nAvailable topics:")
+            for name in HELP_SECTIONS.keys():
+                if name != "Overview":
+                    print(f"  {name}")
+            print("\nType 'HELP' to see the menu")
+
+
+# ============================================================================
+# ALTERNATIVE: PAGED OUTPUT FUNCTION (Optional enhancement)
+# ============================================================================
+def show_paged_help(text, lines_per_page=20):
+    """
+    Show help text one page at a time
+    Optional: Add this for very long help sections
+    """
+    lines = text.split('\n')
+    total_lines = len(lines)
+    
+    for i in range(0, total_lines, lines_per_page):
+        # Show one page
+        page_lines = lines[i:i+lines_per_page]
+        for line in page_lines:
+            print(line)
+        
+        # Check if more pages
+        if i + lines_per_page < total_lines:
+            response = input(f"\n[Page {i//lines_per_page + 1}] Press Enter for more, 'q' to quit: ")
+            if response.lower() == 'q':
+                break
+            print()  # Blank line before next page
+
+
+
+===== integer_ops.py =====
+# ============================================================================
+# FILE: rpn_calculator/integer_ops.py
+# ============================================================================
+"""Integer operations (GCD, LCM, FRAC)"""
+
+import math
+from .errors import CalculatorError
+
+def register_operations(calc):
+    """Register integer operations"""
+    return {
+        "GCD": lambda: _op_gcd(calc),
+        "LCM": lambda: _op_lcm(calc),
+        "FRAC": lambda: _op_frac(calc),
+    }
+
+# Integer Operations
+def _op_gcd(calc):
+    if len(calc.stack) < 2:
+        raise CalculatorError("Not enough operands for GCD")
+    
+    b = calc.pop()
+    a = calc.pop()
+    
+    try:
+        # Convert floats to ints if they represent integers
+        if isinstance(a, float) and a.is_integer():
+            a = int(a)
+        if isinstance(b, float) and b.is_integer():
+            b = int(b)
+        
+        if not (isinstance(a, int) and isinstance(b, int)):
+            raise ValueError("GCD requires two integers")
+        
+        result = math.gcd(a, b)
+        calc.push(result)
+    except Exception as e:
+        calc.push(a)
+        calc.push(b)
+        raise CalculatorError(f"Error in GCD: {e}")
+
+def _op_lcm(calc):
+    if len(calc.stack) < 2:
+        raise CalculatorError("Not enough operands for LCM")
+    
+    b = calc.pop()
+    a = calc.pop()
+    
+    try:
+        if isinstance(a, float) and a.is_integer():
+            a = int(a)
+        if isinstance(b, float) and b.is_integer():
+            b = int(b)
+        
+        if not (isinstance(a, int) and isinstance(b, int)):
+            raise ValueError("LCM requires two integers")
+        
+        if a == 0 or b == 0:
+            result = 0
+        else:
+            result = abs(a * b) // math.gcd(a, b)
+        
+        calc.push(result)
+    except Exception as e:
+        calc.push(a)
+        calc.push(b)
+        raise CalculatorError(f"Error in LCM: {e}")
+        
+def _op_frac(calc):
+    """Convert floating point to fraction with residual."""
+    if not calc.stack:
+        raise CalculatorError("FRAC needs a value")
+    
+    x = calc.pop()
+    
+    # Handle complex numbers - convert real and imaginary parts separately
+    if isinstance(x, complex):
+        calc.push(x)
+        print("Converting real part:")
+        calc.push(x.real)
+        _op_frac(calc)
+        print("Converting imaginary part:")
+        calc.push(x.imag)
+        _op_frac(calc)
+        return
+    
+    # Handle vectors
+    if isinstance(x, (list, tuple)):
+        calc.push(x)
+        raise CalculatorError("FRAC cannot process vectors")
+    
+    try:
+        # Handle integers and zero
+        if isinstance(x, int) or x == 0:
+            print(f"{x} = {int(x)}/1")
+            calc.push(x)
+            return
+        
+        # Store sign and work with absolute value
+        sign = 1 if x >= 0 else -1
+        x_abs = abs(x)
+        
+        # Use continued fractions to find best rational approximation
+        # with denominator up to max_denom
+        max_denom = 1000000
+        
+        # Continued fractions algorithm
+        n0, d0 = 0, 1
+        n1, d1 = 1, 0
+        
+        remaining = x_abs
+        
+        for _ in range(50):  # Limit iterations
+            if remaining == 0:
+                break
+                
+            a = int(remaining)
+            
+            n2 = a * n1 + n0
+            d2 = a * d1 + d0
+            
+            if d2 > max_denom:
+                break
+            
+            n0, d0 = n1, d1
+            n1, d1 = n2, d2
+            
+            remaining = remaining - a
+            if remaining == 0:
+                break
+            remaining = 1.0 / remaining
+        
+        # Apply sign to numerator
+        numerator = sign * n1
+        denominator = d1
+        
+        # Calculate residual
+        fraction_value = numerator / denominator
+        residual = x - fraction_value
+        
+        # Format output
+        if abs(residual) < 1e-15:  # Essentially exact
+            print(f"{x} = {numerator}/{denominator}")
+        else:
+            # Format residual in scientific notation
+            if residual == 0:
+                residual_str = "0"
+            else:
+                residual_str = f"{residual:.6e}"
+            print(f"{x} = {numerator}/{denominator} + {residual_str}")
+        
+        # Push the fraction value back (not the original)
+        calc.push(fraction_value)
+        
+    except Exception as e:
+        calc.push(x)
+        raise CalculatorError(f"Error in FRAC: {e}")
+===== integer_ops_old.py =====
+# ============================================================================
+# FILE: rpn_calculator/integer_ops.py
+# ============================================================================
+"""Integer Operations"""
+
+from .errors import CalculatorError
+
+def register_operations(calc):
+    """Register stack operations"""
+    return {
+        # Integer operations
+        "GCD": self._op_gcd,
+        "LCM": self._op_lcm,
+        "FRAC": self._op_frac,
+    }
+
+    # Integer Operations
+    def _op_gcd(self):
+        if len(self.stack) < 2:
+            raise CalculatorError("Not enough operands for GCD")
+        
+        b = self.stack.pop()
+        a = self.stack.pop()
+        
+        try:
+            # Convert floats to ints if they represent integers
+            if isinstance(a, float) and a.is_integer():
+                a = int(a)
+            if isinstance(b, float) and b.is_integer():
+                b = int(b)
+            
+            if not (isinstance(a, int) and isinstance(b, int)):
+                raise ValueError("GCD requires two integers")
+            
+            result = math.gcd(a, b)
+            self.stack.append(result)
+        except Exception as e:
+            self.stack.append(a)
+            self.stack.append(b)
+            raise CalculatorError(f"Error in GCD: {e}")
+    
+    def _op_lcm(self):
+        if len(self.stack) < 2:
+            raise CalculatorError("Not enough operands for LCM")
+        
+        b = self.stack.pop()
+        a = self.stack.pop()
+        
+        try:
+            if isinstance(a, float) and a.is_integer():
+                a = int(a)
+            if isinstance(b, float) and b.is_integer():
+                b = int(b)
+            
+            if not (isinstance(a, int) and isinstance(b, int)):
+                raise ValueError("LCM requires two integers")
+            
+            if a == 0 or b == 0:
+                result = 0
+            else:
+                result = abs(a * b) // math.gcd(a, b)
+            
+            self.stack.append(result)
+        except Exception as e:
+            self.stack.append(a)
+            self.stack.append(b)
+            raise CalculatorError(f"Error in LCM: {e}")
+            
+    def _op_frac(self):
+        ##"""Convert floating point to fraction with residual."""
+        if not self.stack:
+            raise CalculatorError("FRAC needs a value")
+        
+        x = self.stack.pop()
+        
+        # Handle complex numbers - convert real and imaginary parts separately
+        if isinstance(x, complex):
+            self.stack.append(x)
+            print("Converting real part:")
+            self.stack.append(x.real)
+            self._op_frac()
+            print("Converting imaginary part:")
+            self.stack.append(x.imag)
+            self._op_frac()
+            return
+        
+        # Handle vectors
+        if isinstance(x, (list, tuple)):
+            self.stack.append(x)
+            raise CalculatorError("FRAC cannot process vectors")
+        
+        try:
+            # Handle integers and zero
+            if isinstance(x, int) or x == 0:
+                print(f"{x} = {int(x)}/1")
+                self.stack.append(x)
+                return
+            
+            # Store sign and work with absolute value
+            sign = 1 if x >= 0 else -1
+            x_abs = abs(x)
+            
+            # Use continued fractions to find best rational approximation
+            # with denominator up to max_denom
+            max_denom = 1000000
+            
+            # Continued fractions algorithm
+            n0, d0 = 0, 1
+            n1, d1 = 1, 0
+            
+            remaining = x_abs
+            
+            for _ in range(50):  # Limit iterations
+                if remaining == 0:
+                    break
+                    
+                a = int(remaining)
+                
+                n2 = a * n1 + n0
+                d2 = a * d1 + d0
+                
+                if d2 > max_denom:
+                    break
+                
+                n0, d0 = n1, d1
+                n1, d1 = n2, d2
+                
+                remaining = remaining - a
+                if remaining == 0:
+                    break
+                remaining = 1.0 / remaining
+            
+            # Apply sign to numerator
+            numerator = sign * n1
+            denominator = d1
+            
+            # Calculate residual
+            fraction_value = numerator / denominator
+            residual = x - fraction_value
+            
+            # Format output
+            if abs(residual) < 1e-15:  # Essentially exact
+                print(f"{x} = {numerator}/{denominator}")
+            else:
+                # Format residual in scientific notation
+                if residual == 0:
+                    residual_str = "0"
+                else:
+                    residual_str = f"{residual:.6e}"
+                print(f"{x} = {numerator}/{denominator} + {residual_str}")
+            
+            # Push the fraction value back (not the original)
+            self.stack.append(fraction_value)
+            
+        except Exception as e:
+            self.stack.append(x)
+            raise CalculatorError(f"Error in FRAC: {e}")
+
+===== logarithmic.py =====
+"""Logarithmic and exponential operations"""
+
+import math
+import cmath
+from .errors import CalculatorError
+
+def register_operations(calc):
+    """Register logarithmic and exponential operations"""
+    return {
+        "LOG": lambda: _unary_math(calc, math.log10, cmath.log10, "LOG"),
+        "LOG2": lambda: _unary_math(calc, math.log2, lambda x: cmath.log(x, 2), "LOG2"),
+        "LN": lambda: _unary_math(calc, math.log, cmath.log, "LN"),
+        "EXP": lambda: _unary_math(calc, math.exp, cmath.exp, "EXP"),
+        "SQRT": lambda: _unary_math(calc, math.sqrt, cmath.sqrt, "SQRT"),
+        "1/X": lambda: _op_inverse(calc),
+        "INV": lambda: _op_inverse(calc),
+    }
+
+def _unary_math(calc, real_func, complex_func, name: str):
+    if not calc.stack:
+        raise CalculatorError(f"Stack empty before '{name}'")
+    
+    x = calc.pop()
+    try:
+        is_complex = isinstance(x, complex)
+        needs_complex = (name in {"LOG", "LOG2", "LN"} and x <= 0) or \
+                      (name == "SQRT" and x < 0)
+        
+        if is_complex or needs_complex:
+            result = complex_func(x)
+        else:
+            result = real_func(x)
+        
+        calc.push(result)
+    except Exception as e:
+        calc.push(x)
+        raise CalculatorError(f"Error in {name}: {e}")
+
+def _op_inverse(calc):
+    if not calc.stack:
+        raise CalculatorError("Stack empty before '1/X'")
+    
+    x = calc.pop()
+    try:
+        if x == 0:
+            raise ZeroDivisionError("Cannot invert zero")
+        calc.push(1 / x)
+    except Exception as e:
+        calc.push(x)
+        raise CalculatorError(f"Error in 1/X: {e}")
+===== logging.py =====
+# ============================================================================
+# FILE: rpn_calculator/logging.py
+# ============================================================================
+"""Logging functionality for calculator operations"""
+
+import os
+from datetime import datetime
+from typing import Any, List
+
+class CalculatorLogger:
+    """Handles logging of calculator operations to file"""
+    
+    def __init__(self, log_directory="logs", enabled=True):
+        """
+        Initialize logger
+        
+        Args:
+            log_directory: Directory to store log files
+            enabled: Whether logging is enabled
+        """
+        self.enabled = enabled
+        self.log_directory = log_directory
+        self.log_file = None
+        self.session_start = None
+        
+        if self.enabled:
+            self._create_log_file()
+    
+    def _create_log_file(self):
+
+        #print(f"DEBUG: Current working directory: {os.getcwd()}")
+        #print(f"DEBUG: Log directory will be: {self.log_directory}")
+        full_path = os.path.join(os.getcwd(), self.log_directory) 
+        #print(f"DEBUG: Full log path: {full_path}")
+
+        """Create a new log file with timestamp"""
+        # Create logs directory if it doesn't exist
+        if not os.path.exists(self.log_directory):
+            os.makedirs(self.log_directory)
+        
+        # Generate timestamp for filename
+        self.session_start = datetime.now()
+        timestamp = self.session_start.strftime("%Y%m%d_%H%M%S")
+        filename = f"rpn_log_{timestamp}.txt"
+        self.log_file = os.path.join(self.log_directory, filename)
+        
+        # Write header
+        with open(self.log_file, 'w', encoding='utf-8') as f:
+            f.write("="*80 + "\n")
+            f.write("RPN CALCULATOR SESSION LOG\n")
+            f.write(f"Session started: {self.session_start.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("="*80 + "\n\n")
+        
+        #print(f"Logging to: {self.log_file}")
+        print(f"Logging to: {full_path}")
+    
+    def log_operation(self, input_line: str, stack_before: List[Any], 
+                     stack_after: List[Any], error: str = None):
+        """
+        Log an operation
+        
+        Args:
+            input_line: The input command/expression
+            stack_before: Stack state before operation
+            stack_after: Stack state after operation
+            error: Error message if operation failed
+        """
+        if not self.enabled or not self.log_file:
+            return
+        
+        try:
+            with open(self.log_file, 'a', encoding='utf-8') as f:
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                
+                # Log timestamp and input
+                f.write(f"[{timestamp}] Input: {input_line}\n")
+                
+                # Log stack before
+                if stack_before:
+                    f.write(f"  Stack before: {self._format_stack(stack_before)}\n")
+                else:
+                    f.write(f"  Stack before: [empty]\n")
+                
+                # Log error or result
+                if error:
+                    f.write(f"  ERROR: {error}\n")
+                else:
+                    if stack_after:
+                        f.write(f"  Stack after:  {self._format_stack(stack_after)}\n")
+                        # Highlight what changed/was added
+                        if len(stack_after) > len(stack_before):
+                            new_items = stack_after[len(stack_before):]
+                            f.write(f"  Result: {self._format_value(new_items[-1])}\n")
+                        elif stack_after:
+                            f.write(f"  Result: {self._format_value(stack_after[-1])}\n")
+                    else:
+                        f.write(f"  Stack after:  [empty]\n")
+                
+                f.write("\n")  # Blank line between operations
+        except Exception as e:
+            print(f"Warning: Failed to write to log file: {e}")
+    
+    def log_message(self, message: str):
+        """Log a general message"""
+        if not self.enabled or not self.log_file:
+            return
+        
+        try:
+            with open(self.log_file, 'a', encoding='utf-8') as f:
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                f.write(f"[{timestamp}] {message}\n\n")
+        except Exception as e:
+            print(f"Warning: Failed to write to log file: {e}")
+    
+    def _format_stack(self, stack: List[Any]) -> str:
+        """Format stack for display"""
+        if not stack:
+            return "[empty]"
+        return "[" + ", ".join(self._format_value(v) for v in stack) + "]"
+    
+    def _format_value(self, val: Any) -> str:
+        """Format a single value for display"""
+        if isinstance(val, complex):
+            if val.imag >= 0:
+                return f"{val.real}+{val.imag}j"
+            else:
+                return f"{val.real}{val.imag}j"
+        elif isinstance(val, float):
+            # Limit decimal places for readability
+            return f"{val:.6g}"
+        elif isinstance(val, (list, tuple)):
+            # FIX THIS -- need cleaner display for long vectors
+            # Truncate long vectors/matrices
+
+            #if len(val) > 5:
+            #    return f"[{len(val)} elements]"
+			
+            return str(val)
+        else:
+            return str(val)
+    
+    def close(self):
+        """Close the log file and write footer"""
+        if not self.enabled or not self.log_file:
+            return
+        
+        try:
+            with open(self.log_file, 'a', encoding='utf-8') as f:
+                f.write("="*80 + "\n")
+                session_end = datetime.now()
+                f.write(f"Session ended: {session_end.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                
+                if self.session_start:
+                    duration = session_end - self.session_start
+                    f.write(f"Session duration: {duration}\n")
+                
+                f.write("="*80 + "\n")
+            
+            print(f"Log saved to: {self.log_file}")
+        except Exception as e:
+            print(f"Warning: Failed to close log file: {e}")
+
+
+
+===== matrices.py =====
+# ============================================================================
+# FILE: rpn_calculator/matrices.py
+# ============================================================================
+"""Matrix operations"""
+
+import numpy as np
+from .errors import CalculatorError
+from .utils import is_matrix, to_numpy_matrix, from_numpy_matrix
+
+def register_operations(calc):
+    """Register matrix operations"""
+    return {
+        # Creation and properties
+        "MATRIX": lambda: _op_matrix(calc),
+        "IDENTITY": lambda: _op_identity(calc),
+        "MSIZE": lambda: _op_msize(calc),
+        "TRANSPOSE": lambda: _op_transpose(calc),
+        
+        # Arithmetic
+        "M+": lambda: _op_madd(calc),
+        "M-": lambda: _op_msub(calc),
+        "M*": lambda: _op_mmul(calc),
+        "MSCALE": lambda: _op_mscale(calc),
+        
+        # Properties
+        "DET": lambda: _op_det(calc),
+        "TRACE": lambda: _op_trace(calc),
+        "MINV": lambda: _op_minv(calc),
+        "RANK": lambda: _op_rank(calc),
+        
+        # Advanced
+        "EIGEN": lambda: _op_eigenvalues(calc),
+        "EIGENVEC": lambda: _op_eigenvectors(calc),
+        "RREF": lambda: _op_rref(calc),
+        "MSOLVE": lambda: _op_msolve(calc),
+    }
+
+# Matrix Creation and Properties
+def _op_matrix(calc):
+    """Create matrix from rows on stack. Usage: row1 row2 ... n MATRIX"""
+    if not calc.stack:
+        raise CalculatorError("MATRIX needs number of rows")
+    
+    n = calc.pop()
+    if not isinstance(n, int) or n < 1:
+        calc.push(n)
+        raise CalculatorError("MATRIX needs positive integer for number of rows")
+    
+    if len(calc.stack) < n:
+        calc.push(n)
+        raise CalculatorError(f"MATRIX needs {n} rows on stack")
+    
+    rows = []
+    for _ in range(n):
+        row = calc.pop()
+        if not isinstance(row, (list, tuple)):
+            for r in reversed(rows):
+                calc.push(r)
+            calc.push(row)
+            calc.push(n)
+            raise CalculatorError("MATRIX expects vectors (rows) on stack")
+        rows.insert(0, list(row))
+    
+    if rows and not all(len(row) == len(rows[0]) for row in rows):
+        for r in rows:
+            calc.push(r)
+        calc.push(n)
+        raise CalculatorError("All matrix rows must have same length")
+    
+    calc.push(rows)
+    print(f"Created {len(rows)}×{len(rows[0]) if rows else 0} matrix")
+
+def _op_identity(calc):
+    """Create n×n identity matrix"""
+    if not calc.stack:
+        raise CalculatorError("IDENTITY needs dimension n")
+    
+    n = calc.pop()
+    if not isinstance(n, int) or n < 1:
+        calc.push(n)
+        raise CalculatorError("IDENTITY needs positive integer")
+    
+    identity = np.eye(n)
+    calc.push(from_numpy_matrix(identity))
+    print(f"Created {n}×{n} identity matrix")
+
+def _op_msize(calc):
+    """Get matrix dimensions (returns rows, cols)"""
+    if not calc.stack:
+        raise CalculatorError("MSIZE needs a matrix")
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("MSIZE expects a matrix")
+    
+    rows = len(m)
+    cols = len(m[0]) if rows > 0 else 0
+    calc.push(rows)
+    calc.push(cols)
+    print(f"Matrix size: {rows}×{cols}")
+
+def _op_transpose(calc):
+    """Transpose matrix"""
+    if not calc.stack:
+        raise CalculatorError("TRANSPOSE needs a matrix")
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("TRANSPOSE expects a matrix")
+    
+    try:
+        arr = to_numpy_matrix(m)
+        result = arr.T
+        calc.push(from_numpy_matrix(result))
+    except Exception as e:
+        calc.push(m)
+        raise CalculatorError(f"Error in TRANSPOSE: {e}")
+
+# Matrix Arithmetic
+def _op_madd(calc):
+    """Matrix addition"""
+    if len(calc.stack) < 2:
+        raise CalculatorError("M+ needs 2 matrices")
+    
+    b = calc.pop()
+    a = calc.pop()
+    
+    if not (is_matrix(a) and is_matrix(b)):
+        calc.push(a)
+        calc.push(b)
+        raise CalculatorError("M+ expects two matrices")
+    
+    try:
+        arr_a = to_numpy_matrix(a)
+        arr_b = to_numpy_matrix(b)
+        
+        if arr_a.shape != arr_b.shape:
+            raise ValueError("Matrix dimensions must match")
+        
+        result = arr_a + arr_b
+        calc.push(from_numpy_matrix(result))
+    except Exception as e:
+        calc.push(a)
+        calc.push(b)
+        raise CalculatorError(f"Error in M+: {e}")
+
+def _op_msub(calc):
+    """Matrix subtraction"""
+    if len(calc.stack) < 2:
+        raise CalculatorError("M- needs 2 matrices")
+    
+    b = calc.pop()
+    a = calc.pop()
+    
+    if not (is_matrix(a) and is_matrix(b)):
+        calc.push(a)
+        calc.push(b)
+        raise CalculatorError("M- expects two matrices")
+    
+    try:
+        arr_a = to_numpy_matrix(a)
+        arr_b = to_numpy_matrix(b)
+        
+        if arr_a.shape != arr_b.shape:
+            raise ValueError("Matrix dimensions must match")
+        
+        result = arr_a - arr_b
+        calc.push(from_numpy_matrix(result))
+    except Exception as e:
+        calc.push(a)
+        calc.push(b)
+        raise CalculatorError(f"Error in M-: {e}")
+
+def _op_mmul(calc):
+    """Matrix multiplication"""
+    if len(calc.stack) < 2:
+        raise CalculatorError("M* needs 2 matrices")
+    
+    b = calc.pop()
+    a = calc.pop()
+    
+    is_a_matrix = is_matrix(a)
+    is_b_matrix = is_matrix(b)
+    
+    if not is_a_matrix and not is_b_matrix:
+        calc.push(a)
+        calc.push(b)
+        raise CalculatorError("M* needs at least one matrix")
+    
+    try:
+        if is_a_matrix and not is_b_matrix:
+            arr_a = to_numpy_matrix(a)
+            result = b * arr_a
+            calc.push(from_numpy_matrix(result))
+        elif not is_a_matrix and is_b_matrix:
+            arr_b = to_numpy_matrix(b)
+            result = a * arr_b
+            calc.push(from_numpy_matrix(result))
+        else:
+            arr_a = to_numpy_matrix(a)
+            arr_b = to_numpy_matrix(b)
+            
+            if arr_a.shape[1] != arr_b.shape[0]:
+                raise ValueError(f"Cannot multiply {arr_a.shape[0]}×{arr_a.shape[1]} "
+                               f"by {arr_b.shape[0]}×{arr_b.shape[1]}")
+            
+            result = np.matmul(arr_a, arr_b)
+            calc.push(from_numpy_matrix(result))
+    except Exception as e:
+        calc.push(a)
+        calc.push(b)
+        raise CalculatorError(f"Error in M*: {e}")
+
+def _op_mscale(calc):
+    """Scale matrix by scalar"""
+    if len(calc.stack) < 2:
+        raise CalculatorError("MSCALE needs matrix and scalar")
+    
+    scalar = calc.pop()
+    m = calc.pop()
+    
+    if not is_matrix(m):
+        calc.push(m)
+        calc.push(scalar)
+        raise CalculatorError("MSCALE expects matrix then scalar")
+    
+    try:
+        arr = to_numpy_matrix(m)
+        result = scalar * arr
+        calc.push(from_numpy_matrix(result))
+    except Exception as e:
+        calc.push(m)
+        calc.push(scalar)
+        raise CalculatorError(f"Error in MSCALE: {e}")
+
+# Matrix Properties
+def _op_det(calc):
+    """Determinant of matrix"""
+    if not calc.stack:
+        raise CalculatorError("DET needs a matrix")
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("DET expects a matrix")
+    
+    try:
+        arr = to_numpy_matrix(m)
+        if arr.shape[0] != arr.shape[1]:
+            raise ValueError("DET requires square matrix")
+        
+        det = np.linalg.det(arr)
+        if isinstance(det, complex) and abs(det.imag) < 1e-10:
+            det = det.real
+        calc.push(det)
+        print(f"Determinant: {det}")
+    except Exception as e:
+        calc.push(m)
+        raise CalculatorError(f"Error in DET: {e}")
+
+def _op_trace(calc):
+    """Trace of matrix (sum of diagonal)"""
+    if not calc.stack:
+        raise CalculatorError("TRACE needs a matrix")
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("TRACE expects a matrix")
+    
+    try:
+        arr = to_numpy_matrix(m)
+        if arr.shape[0] != arr.shape[1]:
+            raise ValueError("TRACE requires square matrix")
+        
+        trace = np.trace(arr)
+        if isinstance(trace, complex) and abs(trace.imag) < 1e-10:
+            trace = trace.real
+        calc.push(trace)
+        print(f"Trace: {trace}")
+    except Exception as e:
+        calc.push(m)
+        raise CalculatorError(f"Error in TRACE: {e}")
+
+def _op_minv(calc):
+    """Matrix inverse"""
+    if not calc.stack:
+        raise CalculatorError("MINV needs a matrix")
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("MINV expects a matrix")
+    
+    try:
+        arr = to_numpy_matrix(m)
+        if arr.shape[0] != arr.shape[1]:
+            raise ValueError("MINV requires square matrix")
+        
+        det = np.linalg.det(arr)
+        if abs(det) < 1e-10:
+            raise ValueError("Matrix is singular (determinant ≈ 0)")
+        
+        inv = np.linalg.inv(arr)
+        calc.push(from_numpy_matrix(inv))
+    except Exception as e:
+        calc.push(m)
+        raise CalculatorError(f"Error in MINV: {e}")
+
+def _op_rank(calc):
+    """Matrix rank"""
+    if not calc.stack:
+        raise CalculatorError("RANK needs a matrix")
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("RANK expects a matrix")
+    
+    try:
+        arr = to_numpy_matrix(m)
+        rank = np.linalg.matrix_rank(arr)
+        calc.push(rank)
+        print(f"Rank: {rank}")
+    except Exception as e:
+        calc.push(m)
+        raise CalculatorError(f"Error in RANK: {e}")
+
+# Advanced Operations
+def _op_eigenvalues(calc):
+    """Compute eigenvalues of matrix"""
+    if not calc.stack:
+        raise CalculatorError("EIGEN needs a matrix")
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("EIGEN expects a matrix")
+    
+    try:
+        arr = to_numpy_matrix(m)
+        if arr.shape[0] != arr.shape[1]:
+            raise ValueError("EIGEN requires square matrix")
+        
+        eigenvalues = np.linalg.eigvals(arr)
+        result = []
+        for val in eigenvalues:
+            if isinstance(val, complex) and abs(val.imag) < 1e-10:
+                val = val.real
+            if isinstance(val, float) and abs(val - round(val)) < 1e-10:
+                val = int(round(val))
+            result.append(val)
+        
+        calc.push(result)
+        print(f"Eigenvalues: {result}")
+    except Exception as e:
+        calc.push(m)
+        raise CalculatorError(f"Error in EIGEN: {e}")
+
+def _op_eigenvectors(calc):
+    """Compute eigenvalues and eigenvectors"""
+    if not calc.stack:
+        raise CalculatorError("EIGENVEC needs a matrix")
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("EIGENVEC expects a matrix")
+    
+    try:
+        arr = to_numpy_matrix(m)
+        if arr.shape[0] != arr.shape[1]:
+            raise ValueError("EIGENVEC requires square matrix")
+        
+        eigenvalues, eigenvectors = np.linalg.eig(arr)
+        
+        evals = []
+        for val in eigenvalues:
+            if isinstance(val, complex) and abs(val.imag) < 1e-10:
+                val = val.real
+            if isinstance(val, float) and abs(val - round(val)) < 1e-10:
+                val = int(round(val))
+            evals.append(val)
+        
+        calc.push(evals)
+        calc.push(from_numpy_matrix(eigenvectors))
+        print(f"Eigenvalues: {evals}")
+        print("Eigenvectors pushed as columns of matrix")
+    except Exception as e:
+        calc.push(m)
+        raise CalculatorError(f"Error in EIGENVEC: {e}")
+
+def _op_rref(calc):
+    """Reduced row echelon form"""
+    if not calc.stack:
+        raise CalculatorError("RREF needs a matrix")
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("RREF expects a matrix")
+    
+    try:
+        arr = to_numpy_matrix(m).astype(float)
+        rows, cols = arr.shape
+        
+        current_row = 0
+        for col in range(cols):
+            if current_row >= rows:
+                break
+            
+            pivot_row = current_row
+            for row in range(current_row + 1, rows):
+                if abs(arr[row, col]) > abs(arr[pivot_row, col]):
+                    pivot_row = row
+            
+            if abs(arr[pivot_row, col]) < 1e-10:
+                continue
+            
+            if pivot_row != current_row:
+                arr[[current_row, pivot_row]] = arr[[pivot_row, current_row]]
+            
+            arr[current_row] = arr[current_row] / arr[current_row, col]
+            
+            for row in range(rows):
+                if row != current_row:
+                    arr[row] = arr[row] - arr[row, col] * arr[current_row]
+            
+            current_row += 1
+        
+        arr[np.abs(arr) < 1e-10] = 0
+        calc.push(from_numpy_matrix(arr))
+    except Exception as e:
+        calc.push(m)
+        raise CalculatorError(f"Error in RREF: {e}")
+
+def _op_msolve(calc):
+    """Solve linear system Ax = b"""
+    if len(calc.stack) < 2:
+        raise CalculatorError("MSOLVE needs matrix A and vector b")
+    
+    b = calc.pop()
+    a = calc.pop()
+    
+    if not is_matrix(a):
+        calc.push(a)
+        calc.push(b)
+        raise CalculatorError("MSOLVE expects matrix A")
+    
+    if not isinstance(b, (list, tuple)):
+        calc.push(a)
+        calc.push(b)
+        raise CalculatorError("MSOLVE expects vector b")
+    
+    try:
+        arr_a = to_numpy_matrix(a)
+        arr_b = np.array(b, dtype=complex if any(isinstance(v, complex) for v in b) else float)
+        
+        if arr_a.shape[0] != arr_a.shape[1]:
+            raise ValueError("MSOLVE requires square matrix A")
+        
+        if len(arr_b) != arr_a.shape[0]:
+            raise ValueError("Vector b length must match matrix A rows")
+        
+        x = np.linalg.solve(arr_a, arr_b)
+        
+        result = []
+        for val in x:
+            if isinstance(val, complex) and abs(val.imag) < 1e-10:
+                val = val.real
+            if isinstance(val, float) and abs(val - round(val)) < 1e-10:
+                val = int(round(val))
+            result.append(val)
+        
+        calc.push(result)
+        print(f"Solution: {result}")
+    except Exception as e:
+        calc.push(a)
+        calc.push(b)
+        raise CalculatorError(f"Error in MSOLVE: {e}")
+===== matrix_decompositions.py =====
+# ============================================================================
+# FILE: rpn_calculator/matrix_decompositions.py
+# ============================================================================
+"""Matrix decomposition operations (LU, QR, SVD, etc.)"""
+
+import numpy as np
+from .errors import CalculatorError
+from .utils import is_matrix, to_numpy_matrix, from_numpy_matrix
+
+def register_operations(calc):
+    """Register matrix decomposition operations"""
+    return {
+        "LU": lambda: _op_lu(calc),
+        "QR": lambda: _op_qr(calc),
+        "SVD": lambda: _op_svd(calc),
+        "CHOLESKY": lambda: _op_cholesky(calc),
+        "SCHUR": lambda: _op_schur(calc),
+        "HESSENBERG": lambda: _op_hessenberg(calc),
+        "COND": lambda: _op_condition(calc),
+        "NORM": lambda: _op_norm(calc),
+    }
+
+def _op_lu(calc):
+    """LU decomposition with partial pivoting: A = PLU"""
+    if not calc.stack:
+        raise CalculatorError("LU needs a matrix")
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("LU expects a matrix")
+    
+    try:
+        arr = to_numpy_matrix(m)
+        if arr.shape[0] != arr.shape[1]:
+            raise ValueError("LU requires square matrix")
+        
+        from scipy.linalg import lu
+        P, L, U = lu(arr)
+        
+        calc.push(from_numpy_matrix(P))
+        calc.push(from_numpy_matrix(L))
+        calc.push(from_numpy_matrix(U))
+        print("LU decomposition complete: P, L, U pushed to stack")
+        print("Verify: P·L·U = A")
+    except ImportError:
+        calc.push(m)
+        raise CalculatorError("LU requires scipy library (pip install scipy)")
+    except Exception as e:
+        calc.push(m)
+        raise CalculatorError(f"Error in LU: {e}")
+
+def _op_qr(calc):
+    """QR decomposition: A = QR"""
+    if not calc.stack:
+        raise CalculatorError("QR needs a matrix")
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("QR expects a matrix")
+    
+    try:
+        arr = to_numpy_matrix(m)
+        Q, R = np.linalg.qr(arr)
+        
+        calc.push(from_numpy_matrix(Q))
+        calc.push(from_numpy_matrix(R))
+        print("QR decomposition complete: Q, R pushed to stack")
+        print("Q is orthogonal, R is upper triangular")
+        print("Verify: Q·R = A")
+    except Exception as e:
+        calc.push(m)
+        raise CalculatorError(f"Error in QR: {e}")
+
+def _op_svd(calc):
+    """Singular Value Decomposition: A = UΣV*"""
+    if not calc.stack:
+        raise CalculatorError("SVD needs a matrix")
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("SVD expects a matrix")
+    
+    try:
+        arr = to_numpy_matrix(m)
+        U, S, Vh = np.linalg.svd(arr, full_matrices=True)
+        
+        rows, cols = arr.shape
+        Sigma = np.zeros((rows, cols), dtype=arr.dtype)
+        min_dim = min(rows, cols)
+        Sigma[:min_dim, :min_dim] = np.diag(S)
+        
+        calc.push(from_numpy_matrix(U))
+        calc.push(from_numpy_matrix(Sigma))
+        calc.push(from_numpy_matrix(Vh))
+        print("SVD complete: U, Σ, V* pushed to stack")
+        print("U and V* are orthogonal/unitary, Σ is diagonal")
+        print("Verify: U·Σ·V* = A")
+    except Exception as e:
+        calc.push(m)
+        raise CalculatorError(f"Error in SVD: {e}")
+
+def _op_cholesky(calc):
+    """Cholesky decomposition: A = L·L*"""
+    if not calc.stack:
+        raise CalculatorError("CHOLESKY needs a matrix")
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("CHOLESKY expects a matrix")
+    
+    try:
+        arr = to_numpy_matrix(m)
+        if arr.shape[0] != arr.shape[1]:
+            raise ValueError("CHOLESKY requires square matrix")
+        
+        L = np.linalg.cholesky(arr)
+        calc.push(from_numpy_matrix(L))
+        print("Cholesky decomposition complete: L pushed to stack")
+        print("L is lower triangular")
+        print("Verify: L·L* = A")
+    except np.linalg.LinAlgError:
+        calc.push(m)
+        raise CalculatorError("CHOLESKY requires positive definite matrix")
+    except Exception as e:
+        calc.push(m)
+        raise CalculatorError(f"Error in CHOLESKY: {e}")
+
+def _op_schur(calc):
+    """Schur decomposition: A = Q·T·Q*"""
+    if not calc.stack:
+        raise CalculatorError("SCHUR needs a matrix")
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("SCHUR expects a matrix")
+    
+    try:
+        arr = to_numpy_matrix(m)
+        if arr.shape[0] != arr.shape[1]:
+            raise ValueError("SCHUR requires square matrix")
+        
+        from scipy.linalg import schur
+        T, Q = schur(arr)
+        
+        calc.push(from_numpy_matrix(Q))
+        calc.push(from_numpy_matrix(T))
+        print("Schur decomposition complete: Q, T pushed to stack")
+        print("Q is unitary, T is upper triangular")
+        print("Verify: Q·T·Q* = A")
+    except ImportError:
+        calc.push(m)
+        raise CalculatorError("SCHUR requires scipy library (pip install scipy)")
+    except Exception as e:
+        calc.push(m)
+        raise CalculatorError(f"Error in SCHUR: {e}")
+
+def _op_hessenberg(calc):
+    """Hessenberg decomposition: A = Q·H·Q*"""
+    if not calc.stack:
+        raise CalculatorError("HESSENBERG needs a matrix")
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("HESSENBERG expects a matrix")
+    
+    try:
+        arr = to_numpy_matrix(m)
+        if arr.shape[0] != arr.shape[1]:
+            raise ValueError("HESSENBERG requires square matrix")
+        
+        from scipy.linalg import hessenberg
+        H, Q = hessenberg(arr, calc_q=True)
+        
+        calc.push(from_numpy_matrix(Q))
+        calc.push(from_numpy_matrix(H))
+        print("Hessenberg decomposition complete: Q, H pushed to stack")
+        print("Q is orthogonal, H is upper Hessenberg")
+        print("Verify: Q·H·Q* = A")
+    except ImportError:
+        calc.push(m)
+        raise CalculatorError("HESSENBERG requires scipy library (pip install scipy)")
+    except Exception as e:
+        calc.push(m)
+        raise CalculatorError(f"Error in HESSENBERG: {e}")
+
+def _op_condition(calc):
+    """Condition number of matrix"""
+    if not calc.stack:
+        raise CalculatorError("COND needs a matrix")
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("COND expects a matrix")
+    
+    try:
+        arr = to_numpy_matrix(m)
+        cond = np.linalg.cond(arr)
+        
+        if np.isinf(cond):
+            print("Condition number: ∞ (singular matrix)")
+        else:
+            print(f"Condition number: {cond:.6e}")
+            if cond > 1e10:
+                print("Warning: Matrix is ill-conditioned")
+        
+        calc.push(float(cond))
+    except Exception as e:
+        calc.push(m)
+        raise CalculatorError(f"Error in COND: {e}")
+
+def _op_norm(calc):
+    """Matrix norm (Frobenius norm by default)"""
+    if not calc.stack:
+        raise CalculatorError("NORM needs a matrix")
+    
+    norm_type = 'fro'
+    if len(calc.stack) >= 2 and isinstance(calc.stack[-1], str):
+        norm_str = calc.pop().lower()
+        if norm_str in ['1', '2', 'inf', 'fro', 'nuc']:
+            norm_type = norm_str if norm_str != 'inf' else np.inf
+        else:
+            calc.push(norm_str)
+    
+    m = calc.pop()
+    if not is_matrix(m):
+        calc.push(m)
+        raise CalculatorError("NORM expects a matrix")
+    
+    try:
+        arr = to_numpy_matrix(m)
+        norm_val = np.linalg.norm(arr, ord=norm_type)
+        
+        if isinstance(norm_val, complex) and abs(norm_val.imag) < 1e-10:
+            norm_val = norm_val.real
+        
+        calc.push(float(norm_val))
+        print(f"Matrix norm ({norm_type}): {norm_val}")
+    except Exception as e:
+        calc.push(m)
+        raise CalculatorError(f"Error in NORM: {e}")
+===== operations.py =====
+# ============================================================================
+# FILE: rpn_calculator/stack_operations.py
+# ============================================================================
+"""Stack manipulation operations"""
+
+from .errors import CalculatorError
+
+def register_operations(calc):
+    """Register stack operations"""
+    return {
+        "C": lambda: _op_clear(calc),
+        "DEL": lambda: _op_delete(calc),
+        "UNDO": lambda: _op_undo(calc),
+        "RD": lambda: _op_roll_down(calc),
+        "RU": lambda: _op_roll_up(calc),
+        "R↓": lambda: _op_roll_down(calc),
+        "R↑": lambda: _op_roll_up(calc),
+        "X<>Y": lambda: _op_swap(calc),
+        "SWAP": lambda: _op_swap(calc),
+    }
+
+def _op_clear(calc):
+    calc.stack.clear()
+    print("Stack cleared.")
+
+def _op_delete(calc):
+    if not calc.stack:
+        raise CalculatorError("Stack is empty — nothing to delete.", restore_stack=False)
+    removed = calc.stack.pop()
+    print(f"Deleted top of stack: {removed}")
+
+def _op_undo(calc):
+    if not calc.history:
+        raise CalculatorError("Nothing to undo.", restore_stack=False)
+    last_state = calc.history.pop()
+    calc.stack.clear()
+    calc.stack.extend(last_state)
+    print("Undo successful. Stack restored to previous state.")
+
+def _op_roll_down(calc):
+    if len(calc.stack) < 2:
+        raise CalculatorError("Need at least 2 stack levels to roll down.")
+    calc.stack.insert(0, calc.stack.pop())
+
+def _op_roll_up(calc):
+    if len(calc.stack) < 2:
+        raise CalculatorError("Need at least 2 stack levels to roll up.")
+    calc.stack.append(calc.stack.pop(0))
+
+def _op_swap(calc):
+    if len(calc.stack) < 2:
+        raise CalculatorError("Need at least 2 stack levels to swap.")
+    calc.stack[-1], calc.stack[-2] = calc.stack[-2], calc.stack[-1]
+===== setup.py =====
+# ============================================================================
+# FILE: setup.py (optional, for installation)
+# ============================================================================
+"""
+from setuptools import setup, find_packages
+
+setup(
+    name="rpn_calculator",
+    version="1.0.0",
+    description="A modular scientific RPN calculator",
+    author="Your Name",
+    packages=find_packages(),
+    install_requires=[
+        "numpy>=1.20.0",
+        "scipy>=1.7.0",  # Optional, for LU, SCHUR, HESSENBERG
+    ],
+    entry_points={
+        'console_scripts': [
+            'rpn-calc=rpn_calculator.cli:main',
+        ],
+    },
+    python_requires='>=3.8',
+)
+"""
+===== stack_operations.py =====
+# ============================================================================
+# FILE: rpn_calculator/stack_operations.py
+# ============================================================================
+"""Stack manipulation operations"""
+
+from .errors import CalculatorError
+
+def register_operations(calc):
+    """Register stack operations"""
+    return {
+        "C": lambda: _op_clear(calc),
+        "DEL": lambda: _op_delete(calc),
+        "UNDO": lambda: _op_undo(calc),
+        "RD": lambda: _op_roll_down(calc),
+        "RU": lambda: _op_roll_up(calc),
+        "R↓": lambda: _op_roll_down(calc),
+        "R↑": lambda: _op_roll_up(calc),
+        "X<>Y": lambda: _op_swap(calc),
+        "SWAP": lambda: _op_swap(calc),
+    }
+
+def _op_clear(calc):
+    calc.stack.clear()
+    print("Stack cleared.")
+
+def _op_delete(calc):
+    if not calc.stack:
+        raise CalculatorError("Stack is empty — nothing to delete.", restore_stack=False)
+    removed = calc.stack.pop()
+    print(f"Deleted top of stack: {removed}")
+
+def _op_undo(calc):
+    if not calc.history:
+        raise CalculatorError("Nothing to undo.", restore_stack=False)
+    last_state = calc.history.pop()
+    calc.stack.clear()
+    calc.stack.extend(last_state)
+    print("Undo successful. Stack restored to previous state.")
+
+def _op_roll_down(calc):
+    if len(calc.stack) < 2:
+        raise CalculatorError("Need at least 2 stack levels to roll down.")
+    calc.stack.insert(0, calc.stack.pop())
+
+def _op_roll_up(calc):
+    if len(calc.stack) < 2:
+        raise CalculatorError("Need at least 2 stack levels to roll up.")
+    calc.stack.append(calc.stack.pop(0))
+
+def _op_swap(calc):
+    if len(calc.stack) < 2:
+        raise CalculatorError("Need at least 2 stack levels to swap.")
+    calc.stack[-1], calc.stack[-2] = calc.stack[-2], calc.stack[-1]
+===== statistics.py =====
+# ============================================================================
+# FILE: rpn_calculator/statistics.py
+# ============================================================================
+"""Statistics operations"""
+
+import math
+from .errors import CalculatorError
+
+def register_operations(calc):
+    """Register statistics operations"""
+    return {
+        "COMB": lambda: _op_comb(calc),
+        "PERM": lambda: _op_perm(calc),
+        "STDV": lambda: _op_stdv(calc),
+    }
+
+# Statistics Operations
+def _op_comb(calc):
+    if len(calc.stack) < 2:
+        raise CalculatorError("COMB requires n and k")
+    
+    k = calc.pop()
+    n = calc.pop()
+    
+    try:
+        # Try to interpret as integers
+        if isinstance(n, float) and n.is_integer():
+            n = int(n)
+        if isinstance(k, float) and k.is_integer():
+            k = int(k)
+        
+        if not (isinstance(n, int) and isinstance(k, int)):
+            raise ValueError("COMB requires integer operands")
+        
+        if k < 0 or n < 0 or k > n:
+            raise ValueError("Invalid domain for COMB")
+        
+        result = math.comb(n, k)
+        calc.push(result)
+        
+    except Exception as e:
+        calc.push(n)
+        calc.push(k)
+        raise CalculatorError(f"Error in COMB: {e}")
+
+def _op_perm(calc):
+    if len(calc.stack) < 2:
+        raise CalculatorError("PERM requires n and k")
+    
+    k = calc.pop()
+    n = calc.pop()
+    
+    try:
+        if isinstance(n, float) and n.is_integer():
+            n = int(n)
+        if isinstance(k, float) and k.is_integer():
+            k = int(k)
+        
+        if not (isinstance(n, int) and isinstance(k, int)):
+            raise ValueError("PERM requires integer operands")
+        
+        if k < 0 or n < 0 or k > n:
+            raise ValueError("Invalid domain for PERM")
+        
+        result = math.perm(n, k)
+        calc.push(result)
+        
+    except Exception as e:
+        calc.push(n)
+        calc.push(k)
+        raise CalculatorError(f"Error in PERM: {e}")
+
+def _op_stdv(calc):
+    if not calc.stack:
+        raise CalculatorError("STDV requires a vector")
+    
+    v = calc.pop()
+    
+    if not isinstance(v, (list, tuple)):
+        calc.push(v)
+        raise CalculatorError("STDV expects a vector")
+    
+    try:
+        if len(v) == 0:
+            raise ValueError("Empty vector")
+        
+        mean = sum(v) / len(v)
+        var = sum((x - mean)**2 for x in v) / len(v)
+        std = var**0.5
+        
+        calc.push(std)
+        
+    except Exception as e:
+        calc.push(v)
+        raise CalculatorError(f"Error in STDV: {e}")
+===== trigonometry.py =====
+# ============================================================================
+# FILE: rpn_calculator/trigonometry.py
+# ============================================================================
+"""Trigonometric operations"""
+
+import math
+import cmath
+from typing import Callable, Optional
+from .errors import CalculatorError
+
+def register_operations(calc):
+    """Register trigonometric operations"""
+    return {
+        "SIN": lambda: _unary_trig(calc, math.sin, cmath.sin, "SIN"),
+        "COS": lambda: _unary_trig(calc, math.cos, cmath.cos, "COS"),
+        "TAN": lambda: _unary_trig(calc, math.tan, cmath.tan, "TAN"),
+        "ASIN": lambda: _unary_inverse_trig(calc, math.asin, cmath.asin, "ASIN", -1, 1),
+        "ACOS": lambda: _unary_inverse_trig(calc, math.acos, cmath.acos, "ACOS", -1, 1),
+        "ATAN": lambda: _unary_inverse_trig(calc, math.atan, cmath.atan, "ATAN"),
+    }
+
+def _unary_trig(calc, real_func: Callable, complex_func: Callable, name: str):
+    """Execute a unary trigonometric operation"""
+    if not calc.stack:
+        raise CalculatorError(f"Stack empty before '{name}'")
+    
+    x = calc.pop()
+    try:
+        is_complex = isinstance(x, complex)
+        if is_complex:
+            result = complex_func(x)
+        else:
+            angle = math.radians(x) if calc.state.degrees else x
+            result = real_func(angle)
+        calc.push(result)
+    except Exception as e:
+        calc.push(x)
+        raise CalculatorError(f"Error in {name}: {e}")
+
+def _unary_inverse_trig(calc, real_func: Callable, complex_func: Callable, 
+                       name: str, min_val: Optional[float] = None, 
+                       max_val: Optional[float] = None):
+    """Execute a unary inverse trigonometric operation"""
+    if not calc.stack:
+        raise CalculatorError(f"Stack empty before '{name}'")
+    
+    x = calc.pop()
+    try:
+        is_complex = isinstance(x, complex)
+        out_of_range = (min_val is not None and max_val is not None and 
+                      not (min_val <= x <= max_val))
+        
+        if is_complex or out_of_range:
+            result = complex_func(x)
+        else:
+            result = real_func(x)
+            if not isinstance(result, complex):
+                result = math.degrees(result) if calc.state.degrees else result
+        
+        calc.push(result)
+    except Exception as e:
+        calc.push(x)
+        raise CalculatorError(f"Error in {name}: {e}")
+===== utils.py =====
+# ============================================================================
+# FILE: rpn_calculator/utils.py
+# ============================================================================
+"""Utility functions used across modules"""
+
+import numpy as np
+
+def is_vector(x) -> bool:
+    """Check if x is a vector (1D list/tuple)"""
+    if isinstance(x, np.ndarray):
+        return x.ndim == 1
+    return isinstance(x, (list, tuple)) and x and not isinstance(x[0], (list, tuple))
+
+def is_matrix(x) -> bool:
+    """Check if x is a valid matrix (2D list/array)"""
+    if not isinstance(x, (list, tuple, np.ndarray)):
+        return False
+    if isinstance(x, np.ndarray):
+        return x.ndim == 2
+    if not x:  # empty list
+        return False
+    # Check if it's a list of lists
+    if not isinstance(x[0], (list, tuple)):
+        return False
+    # Check all rows have same length
+    row_len = len(x[0])
+    return all(isinstance(row, (list, tuple)) and len(row) == row_len for row in x)
+
+def to_numpy_matrix(x):
+    """Convert to numpy matrix, handling complex numbers"""
+    if isinstance(x, np.ndarray):
+        return x
+    return np.array(x, dtype=complex if any(isinstance(val, complex) 
+                    for row in x for val in row) else float)
+
+def from_numpy_matrix(arr):
+    """Convert numpy array back to list format"""
+    result = []
+    for row in arr:
+        new_row = []
+        for val in row:
+            if isinstance(val, complex):
+                if abs(val.imag) < 1e-10:
+                    val = val.real
+            if isinstance(val, float) and abs(val - round(val)) < 1e-10:
+                val = int(round(val))
+            new_row.append(val)
+        result.append(new_row)
+    return result
+===== vectors.py =====
+"""Vector operations"""
+
+import math
+from .errors import CalculatorError
+
+def register_operations(calc):
+    """Register vector operations"""
+    return {
+        "DOT": lambda: _op_dot(calc),
+        "VMAG": lambda: _op_vmag(calc),
+        "VCROSS": lambda: _op_vcross(calc),
+        "VNORM": lambda: _op_vnorm(calc),
+    }
+
+def _op_dot(calc):
+    if len(calc.stack) < 2:
+        raise CalculatorError("DOT needs 2 vectors")
+    b = calc.pop()
+    a = calc.pop()
+    try:
+        if not (hasattr(a, '__iter__') and hasattr(b, '__iter__')):
+            raise ValueError("Both operands must be vectors")
+        if len(a) != len(b):
+            raise ValueError("Vectors must be of the same length")
+        result = sum(x * y for x, y in zip(a, b))
+        calc.push(result)
+    except Exception as e:
+        calc.push(a)
+        calc.push(b)
+        raise CalculatorError(f"Error in DOT: {e}")
+
+def _op_vmag(calc):
+    if not calc.stack:
+        raise CalculatorError("VMAG needs a vector")
+    v = calc.pop()
+    if not isinstance(v, (list, tuple)):
+        calc.push(v)
+        raise CalculatorError("VMAG expects a vector")
+    try:
+        mag = math.sqrt(sum((abs(x) ** 2 for x in v)))
+        calc.push(mag)
+    except Exception as e:
+        calc.push(v)
+        raise CalculatorError(f"Error in VMAG: {e}")
+
+def _op_vcross(calc):
+    if len(calc.stack) < 2:
+        raise CalculatorError("VCROSS needs 2 vectors")
+    b = calc.pop()
+    a = calc.pop()
+    if not (isinstance(a, (list, tuple)) and isinstance(b, (list, tuple))):
+        calc.push(a)
+        calc.push(b)
+        raise CalculatorError("VCROSS expects 2 vectors")
+    if len(a) != 3 or len(b) != 3:
+        calc.push(a)
+        calc.push(b)
+        raise CalculatorError("VCROSS requires 3D vectors")
+    try:
+        cx = a[1] * b[2] - a[2] * b[1]
+        cy = a[2] * b[0] - a[0] * b[2]
+        cz = a[0] * b[1] - a[1] * b[0]
+        calc.push([cx, cy, cz])
+    except Exception as e:
+        calc.push(a)
+        calc.push(b)
+        raise CalculatorError(f"Error in VCROSS: {e}")
+
+def _op_vnorm(calc):
+    if not calc.stack:
+        raise CalculatorError("VNORM needs a vector")
+    v = calc.pop()
+    if not isinstance(v, (list, tuple)):
+        calc.push(v)
+        raise CalculatorError("VNORM expects a vector")
+    try:
+        mag = math.sqrt(sum((x ** 2 for x in v)))
+        if mag == 0:
+            calc.push(v)
+            raise CalculatorError("Cannot normalize zero vector")
+        norm_v = [x / mag for x in v]
+        calc.push(norm_v)
+    except CalculatorError:
+        raise
+    except Exception as e:
+        calc.push(v)
+        raise CalculatorError(f"Error in VNORM: {e}")
+
+===== __init__.py =====
+# ============================================================================
+# FILE: rpn_calculator/__init__.py
+# ============================================================================
+"""
+RPN Calculator Package
+A modular scientific RPN calculator with support for complex numbers,
+vectors, matrices, and advanced operations.
+"""
+
+from .core import Calculator, CalculatorState
+from .errors import CalculatorError
+from .cli import main
+
+__version__ = "1.0.0"
+__all__ = ["Calculator", "CalculatorState", "CalculatorError", "main"]
+===== __main__.py =====
+# ============================================================================
+# FILE: rpn_calculator/__main__.py
+# ============================================================================
+"""
+Main entry point for the calculator package.
+Allows running with: python -m rpn_calculator
+"""
+
+from .cli import main
+
+if __name__ == "__main__":
+    main()
