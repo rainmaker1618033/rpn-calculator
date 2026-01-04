@@ -280,4 +280,3 @@ For bugs and feature requests, please open an issue on GitHub.
 - FFT operations
 - Session logging
 - Comprehensive help system
-"""
