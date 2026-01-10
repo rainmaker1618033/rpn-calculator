@@ -34,6 +34,15 @@ from test_fft_operations import (
     TestFFTApplications
 )
 
+# Add import
+from test_signal_processing import (
+    TestConvolution,
+    Test2DConvolution,
+    TestDeconvolution,
+    TestCrossCorrelation,
+    TestSignalProcessingIntegration
+)
+
 def run_all_tests():
     """Run all test suites"""
     loader = unittest.TestLoader()
@@ -57,6 +66,12 @@ def run_all_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestFFTOperations))
     suite.addTests(loader.loadTestsFromTestCase(TestFFTEdgeCases))
     suite.addTests(loader.loadTestsFromTestCase(TestFFTApplications))
+	# Add to suite
+    suite.addTests(loader.loadTestsFromTestCase(TestConvolution))
+    suite.addTests(loader.loadTestsFromTestCase(Test2DConvolution))
+    suite.addTests(loader.loadTestsFromTestCase(TestDeconvolution))
+    suite.addTests(loader.loadTestsFromTestCase(TestCrossCorrelation))
+    suite.addTests(loader.loadTestsFromTestCase(TestSignalProcessingIntegration))
     
     # Run tests
     runner = unittest.TextTestRunner(verbosity=2)
