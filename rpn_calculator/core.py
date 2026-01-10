@@ -24,6 +24,7 @@ from . import statistics
 from . import integer_ops
 from . import calc_constants
 from . import fft_operations
+from . import signal_processing
 from .logging import CalculatorLogger
 from .formatting import ValueFormatter
 
@@ -84,6 +85,7 @@ class Calculator:
             integer_ops,
             calc_constants,
             fft_operations,
+			signal_processing,
         ]
         
         for module in modules:
