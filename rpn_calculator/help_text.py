@@ -1,7 +1,9 @@
 # ============================================================================
-# FILE: rpn_calculator/help_text.py (UPDATED)
+# FILE: rpn_calculator/help_text.py (PAGINATED VERSION)
 # ============================================================================
-"""Help text and documentation - Improved version"""
+"""Help text and documentation - Paginated version"""
+
+import shutil
 
 # Organize help into categories and subcategories
 HELP_SECTIONS = {
@@ -29,6 +31,7 @@ VECTORS & MATRICES:
   
 SIGNAL PROCESSING:
   FFT          - Fourier transforms (FFT, IFFT, FFT_MAG, FFT_PHASE)
+  Signal       - Convolution and correlation (CONV, CONV2, DECONV, XCORR)
 
 SETTINGS:
   Modes        - DEG/RAD mode, display settings
@@ -281,6 +284,95 @@ Examples:
   DEG [1,1,0,0] FFT_PHASE    → Phase in degrees
 """,
 
+    "Signal": """
+═══════════════════════════════════════════════════════════════════════════
+SIGNAL PROCESSING OPERATIONS
+═══════════════════════════════════════════════════════════════════════════
+
+1D Convolution:
+  CONV          Discrete convolution of two vectors
+  CONVOLVE      Alias for CONV
+  
+  Usage: vector1 vector2 CONV
+  Result length = len(vector1) + len(vector2) - 1
+  
+  Applications:
+  • Filtering signals (moving average, smoothing)
+  • Edge detection
+  • System response analysis
+  • Polynomial multiplication
+
+2D Convolution:
+  CONV2         2D convolution (for matrices/images)
+  
+  Usage: matrix kernel CONV2
+  
+  Applications:
+  • Image filtering and blurring
+  • Edge detection in images
+  • Sharpening
+  • Pattern recognition
+  
+  Common kernels:
+  • Box blur:      [[1,1,1],[1,1,1],[1,1,1]]
+  • Gaussian:      [[1,2,1],[2,4,2],[1,2,1]]
+  • Sharpen:       [[0,-1,0],[-1,5,-1],[0,-1,0]]
+  • Sobel X:       [[-1,0,1],[-2,0,2],[-1,0,1]]
+  • Sobel Y:       [[-1,-2,-1],[0,0,0],[1,2,1]]
+
+Deconvolution:
+  DECONV        Inverse of convolution
+  
+  Usage: convolved_signal original_signal DECONV
+  
+  If c = a ⊗ b, then DECONV(c, b) ≈ a
+  
+  Applications:
+  • Remove blurring/filtering
+  • System identification
+  • Channel equalization
+  • Polynomial division
+  
+  Note: Sensitive to noise; works best with exact known signals
+
+Cross-Correlation:
+  XCORR         Cross-correlation of two vectors
+  
+  Usage: vector1 vector2 XCORR
+  
+  Applications:
+  • Pattern matching
+  • Time-delay estimation
+  • Signal similarity measurement
+  • Auto-correlation (signal with itself)
+
+Examples:
+  # 1D Convolution
+  [1,2,3] [1,1,1] CONV              → [1, 3, 6, 5, 3]
+  [1,2,3,4,5] [0.5,0.5] CONV        → Smooth signal
+  
+  # Verify with deconvolution
+  [1,2,3] [1,1,1] CONV              → [1, 3, 6, 5, 3]
+  [1,1,1] DECONV                    → [1, 2, 3]
+  
+  # 2D Convolution (image processing)
+  [[1,2,3],[4,5,6],[7,8,9]] [[1,1],[1,1]] CONV2
+  
+  # Edge detection
+  image [[-1,0,1],[-2,0,2],[-1,0,1]] CONV2
+  
+  # Auto-correlation
+  [1,2,3,4] [1,2,3,4] XCORR
+
+Workflow Examples:
+  # Apply and remove filter
+  signal [0.5,0.5] CONV [0.5,0.5] DECONV
+  
+  # Polynomial operations
+  [1,2,1] [1,3,2] CONV              → Multiply polynomials
+  [1,5,10,7,2] [1,2,1] DECONV       → Divide polynomials
+""",
+
     "Stats": """
 ═══════════════════════════════════════════════════════════════════════════
 STATISTICS OPERATIONS
@@ -367,22 +459,83 @@ Stack Operations:
 }
 
 
+def get_terminal_height():
+    """Get the terminal height, with fallback to default."""
+    try:
+        return shutil.get_terminal_size().lines
+    except:
+        return 24  # Default fallback
+
+
+def show_paged_text(text, lines_per_page=None):
+    """
+    Display text with pagination if it exceeds screen height.
+    
+    Args:
+        text: The text to display
+        lines_per_page: Number of lines per page (None = auto-detect minus 2 for prompt)
+    """
+    if lines_per_page is None:
+        terminal_height = get_terminal_height()
+        lines_per_page = max(10, terminal_height - 2)  # Leave room for prompt
+    
+    lines = text.split('\n')
+    total_lines = len(lines)
+    
+    # If content fits on one screen, just print it
+    if total_lines <= lines_per_page:
+        print(text)
+        return
+    
+    # Otherwise, page through it
+    line_num = 0
+    while line_num < total_lines:
+        # Calculate this page
+        page_end = min(line_num + lines_per_page, total_lines)
+        
+        # Display this page
+        for i in range(line_num, page_end):
+            print(lines[i])
+        
+        line_num = page_end
+        
+        # If there's more, prompt to continue
+        if line_num < total_lines:
+            remaining = total_lines - line_num
+            try:
+                response = input(f"\n[{remaining} more lines] Press Enter to continue, 'q' to quit: ")
+                if response.lower().strip() in ['q', 'quit', 'exit']:
+                    print("[Help display interrupted]")
+                    break
+                print()  # Blank line before next page
+            except (KeyboardInterrupt, EOFError):
+                print("\n[Help display interrupted]")
+                break
+
+
 def show_instructions(choice=None):
-    """Display calculator instructions or a specific section."""
+    """Display calculator instructions or a specific section with pagination."""
     if choice is None:
-        # Show overview/menu
+        # Show overview/menu - this is short enough to not need pagination
         print(HELP_SECTIONS["Overview"])
+        
     elif choice.upper() == "ALL":
-        # Show all sections
+        # Show all sections with pagination
         print("\n" + "="*79)
         print("COMPLETE HELP DOCUMENTATION")
         print("="*79 + "\n")
+        
+        all_text_parts = []
         for section_name, content in HELP_SECTIONS.items():
             if section_name != "Overview":
-                print(content)
-                print()
+                all_text_parts.append(content)
+                all_text_parts.append("")  # Blank line between sections
+        
+        all_text = "\n".join(all_text_parts)
+        show_paged_text(all_text)
+        
     elif choice.upper().startswith("SEARCH"):
-        # Search functionality
+        # Search functionality - already handles output well
         search_term = choice[6:].strip().upper()
         if not search_term:
             print("Usage: HELP SEARCH <term>")
@@ -391,9 +544,11 @@ def show_instructions(choice=None):
         
         print(f"\nSearching for '{search_term}'...\n")
         found = False
+        results = []
+        
         for section_name, content in HELP_SECTIONS.items():
             if search_term in content.upper():
-                print(f"Found in section: {section_name}")
+                results.append(f"Found in section: {section_name}")
                 # Show just the relevant part
                 lines = content.split('\n')
                 for i, line in enumerate(lines):
@@ -401,17 +556,20 @@ def show_instructions(choice=None):
                         # Show context (3 lines before and after)
                         start = max(0, i-3)
                         end = min(len(lines), i+4)
-                        print("  ...")
+                        results.append("  ...")
                         for j in range(start, end):
                             marker = ">>> " if j == i else "    "
-                            print(marker + lines[j])
-                        print("  ...")
-                        print()
+                            results.append(marker + lines[j])
+                        results.append("  ...")
+                        results.append("")
                 found = True
         
-        if not found:
+        if found:
+            show_paged_text("\n".join(results))
+        else:
             print(f"No help found for '{search_term}'")
             print("Try: HELP (to see available categories)")
+            
     else:
         # Show specific section - try case-insensitive match
         key = choice.strip()
@@ -424,7 +582,7 @@ def show_instructions(choice=None):
                 break
         
         if matched_key:
-            print(HELP_SECTIONS[matched_key])
+            show_paged_text(HELP_SECTIONS[matched_key])
         else:
             print(f"Unknown help topic: {choice}")
             print("\nAvailable topics:")
@@ -435,27 +593,30 @@ def show_instructions(choice=None):
 
 
 # ============================================================================
-# ALTERNATIVE: PAGED OUTPUT FUNCTION (Optional enhancement)
+# USAGE EXAMPLES
 # ============================================================================
-def show_paged_help(text, lines_per_page=20):
-    """
-    Show help text one page at a time
-    Optional: Add this for very long help sections
-    """
-    lines = text.split('\n')
-    total_lines = len(lines)
+if __name__ == "__main__":
+    # Test the pagination
+    print("Testing pagination...\n")
     
-    for i in range(0, total_lines, lines_per_page):
-        # Show one page
-        page_lines = lines[i:i+lines_per_page]
-        for line in page_lines:
-            print(line)
-        
-        # Check if more pages
-        if i + lines_per_page < total_lines:
-            response = input(f"\n[Page {i//lines_per_page + 1}] Press Enter for more, 'q' to quit: ")
-            if response.lower() == 'q':
-                break
-            print()  # Blank line before next page
-
-
+    # Test 1: Short section (no pagination)
+    print("=" * 79)
+    print("TEST 1: Short section (Overview)")
+    print("=" * 79)
+    show_instructions("Overview")
+    
+    input("\n[Press Enter for next test]")
+    
+    # Test 2: Long section (with pagination)
+    print("\n" + "=" * 79)
+    print("TEST 2: Long section (Signal)")
+    print("=" * 79)
+    show_instructions("Signal")
+    
+    input("\n[Press Enter for next test]")
+    
+    # Test 3: Search (may be paginated)
+    print("\n" + "=" * 79)
+    print("TEST 3: Search")
+    print("=" * 79)
+    show_instructions("SEARCH matrix")
