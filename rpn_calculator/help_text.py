@@ -78,7 +78,7 @@ Basic Arithmetic:
   ||           Parallel operation: (x*y)/(x+y)
   
 Logarithmic & Exponential:
-  LOG          Base-10 logarithm
+  LOG10          Base-10 logarithm
   LOG2         Base-2 logarithm
   LN           Natural logarithm
   EXP          e^x

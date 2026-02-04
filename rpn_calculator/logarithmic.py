@@ -7,7 +7,7 @@ from .errors import CalculatorError
 def register_operations(calc):
     """Register logarithmic and exponential operations"""
     return {
-        "LOG": lambda: _unary_math(calc, math.log10, cmath.log10, "LOG"),
+        "LOG10": lambda: _unary_math(calc, math.log10, cmath.log10, "LOG10"),
         "LOG2": lambda: _unary_math(calc, math.log2, lambda x: cmath.log(x, 2), "LOG2"),
         "LN": lambda: _unary_math(calc, math.log, cmath.log, "LN"),
         "EXP": lambda: _unary_math(calc, math.exp, cmath.exp, "EXP"),
@@ -23,7 +23,7 @@ def _unary_math(calc, real_func, complex_func, name: str):
     x = calc.pop()
     try:
         is_complex = isinstance(x, complex)
-        needs_complex = (name in {"LOG", "LOG2", "LN"} and x <= 0) or \
+        needs_complex = (name in {"LOG10", "LOG2", "LN"} and x <= 0) or \
                       (name == "SQRT" and x < 0)
         
         if is_complex or needs_complex:
