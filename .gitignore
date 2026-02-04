@@ -51,3 +51,4 @@ wheels/
 # ------------------------------------------------------------
 .DS_Store
 Thumbs.db
+rpn_calculator/combined.txt
