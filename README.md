@@ -1,6 +1,6 @@
 # RPN Calculator
 
-A powerful, modular scientific RPN (Reverse Polish Notation) calculator with support for complex numbers, vectors, matrices, and advanced signal processing.
+A modular scientific RPN (Reverse Polish Notation) calculator with support for complex numbers, vectors, matrices, and advanced signal processing.
 
 ![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
